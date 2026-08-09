@@ -1,0 +1,183 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: macos-15
+
+    env:
+      SCHEME:  Nidget
+      PROJECT: Nidget.xcodeproj
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: ver
+        run: |
+          # Versions live in the pbxproj build settings (Info.plist uses $(MARKETING_VERSION)).
+          CURRENT=$(grep -m1 'MARKETING_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
+          BUILD=$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          PATCH=${PATCH:-0}
+          NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
+          NEW_BUILD="$((BUILD + 1))"
+          echo "version=$NEW_VER" >> "$GITHUB_OUTPUT"
+          echo "build=$NEW_BUILD"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VER"     >> "$GITHUB_OUTPUT"
+
+      - name: Update version in project
+        run: |
+          # Both Debug and Release configs carry the settings; bump every occurrence.
+          sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = ${{ steps.ver.outputs.version }};/g" "$PROJECT/project.pbxproj"
+          sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = ${{ steps.ver.outputs.build }};/g" "$PROJECT/project.pbxproj"
+          echo "Bumped to ${{ steps.ver.outputs.version }} (build ${{ steps.ver.outputs.build }})"
+
+      - name: Select Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          echo "Using: $LATEST"
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+
+      - name: Build (unsigned)
+        run: |
+          # Tee the RAW xcodebuild output to a log. We deliberately DON'T fail on the pipeline exit
+          # code; the explicit compile-diagnostic grep below is the real gate (proven pattern from
+          # Stashy: xcodebuild's trailing validation steps can exit non-zero for reasons that don't
+          # matter to an unsigned sideload build).
+          set +e
+          xcodebuild build \
+            -project      "$PROJECT" \
+            -scheme       "$SCHEME" \
+            -configuration Release \
+            -destination  "generic/platform=iOS" \
+            -derivedDataPath build/DD \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee xcodebuild.log
+          set -e
+
+          # Fail fast + clearly on a real compiler diagnostic. Match the precise Swift/clang format
+          # "<path>:<line>:<col>: error: <msg>" so benign "error:" prose can't false-positive.
+          if grep -qE ':[0-9]+:[0-9]+: error: ' xcodebuild.log; then
+            echo "──────────────────────────────────────────────────────────────"
+            echo "❌ COMPILE FAILED — errors below (also annotated on the diff):"
+            echo "──────────────────────────────────────────────────────────────"
+            grep -E ':[0-9]+:[0-9]+: error: ' xcodebuild.log | sort -u
+            grep -E '\.swift:[0-9]+:[0-9]+: error: ' xcodebuild.log | sort -u \
+              | sed -E "s#^${GITHUB_WORKSPACE}/##" \
+              | sed -E 's#^(.+):([0-9]+):([0-9]+): error: (.*)$#::error file=\1,line=\2,col=\3::\4#'
+            exit 1
+          fi
+          echo "✅ No compile errors."
+
+      - name: Package into IPA
+        run: |
+          APP_PATH=$(find build/DD/Build/Products/Release-iphoneos \
+            -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ .app not built (real build failure):"
+            find build/DD/Build/Products -maxdepth 3 2>/dev/null || echo "(build products missing)"
+            exit 1
+          fi
+          echo "✅ Found: $APP_PATH"
+
+          # The build step tolerates xcodebuild's exit code, so verify the .app is complete —
+          # otherwise a compile failure could publish a skeleton IPA with no executable.
+          EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist" 2>/dev/null || echo Nidget)
+          if [ ! -s "$APP_PATH/$EXE" ]; then
+            echo "❌ App executable '$EXE' missing/empty — the build failed (compile/link error)."
+            exit 1
+          fi
+          echo "✅ Executable present."
+
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -qr Nidget.ipa Payload/
+          IPA_BYTES=$(wc -c < Nidget.ipa | tr -d ' ')
+          echo "IPA size: $IPA_BYTES bytes ($(du -sh Nidget.ipa | cut -f1))"
+          # Backstop against publishing a broken shell (those are ~60KB with no binary).
+          if [ "$IPA_BYTES" -lt 500000 ]; then
+            echo "❌ IPA is only $IPA_BYTES bytes — looks like a broken shell; refusing to publish."
+            exit 1
+          fi
+
+      - name: Commit version bump, update apps.json, tag, and publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          PUBLISHED_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          IPA_SIZE=$(wc -c < Nidget.ipa | tr -d ' ')
+          DOWNLOAD_URL="https://github.com/nphil/nidget/releases/download/$TAG/Nidget.ipa"
+          RELEASE_NOTES="Unsigned IPA — sideload with Feather/AltStore. Built from \`$SHORT_SHA\` on $(date -u +'%Y-%m-%d %H:%M UTC')"
+
+          VERSION="$VERSION" PUBLISHED_DATE="$PUBLISHED_DATE" DOWNLOAD_URL="$DOWNLOAD_URL" \
+          IPA_SIZE="$IPA_SIZE" RELEASE_NOTES="$RELEASE_NOTES" \
+          python3 - <<'PYEOF'
+          import json, os
+
+          version = os.environ['VERSION']
+          date    = os.environ['PUBLISHED_DATE']
+          url     = os.environ['DOWNLOAD_URL']
+          size    = int(os.environ['IPA_SIZE'])
+          body    = os.environ['RELEASE_NOTES']
+
+          with open('apps.json') as f:
+              data = json.load(f)
+
+          app = data['apps'][0]
+          new_ver = {
+              "version": version,
+              "buildVersion": version,
+              "date": date,
+              "localizedDescription": body,
+              "downloadURL": url,
+              "size": size
+          }
+
+          app['versions'] = [v for v in app['versions'] if v['version'] != version]
+          app['versions'].insert(0, new_ver)
+
+          with open('apps.json', 'w') as f:
+              json.dump(data, f, indent=2)
+              f.write('\n')
+
+          print(f"apps.json patched for {version} (size {size})")
+          PYEOF
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Nidget.xcodeproj/project.pbxproj apps.json
+          git commit -m "chore: bump version to $VERSION [skip ci]"
+
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          gh release create "$TAG" \
+            Nidget.ipa \
+            --title "$TAG" \
+            --notes "$RELEASE_NOTES"

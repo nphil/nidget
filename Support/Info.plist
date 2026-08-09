@@ -22,6 +22,12 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!--
+	 Opt out of iPhone's default 60fps cap on Core Animation / CADisplayLink so custom animations
+	 can hit the full 120Hz ProMotion rate (proven in Stashy; scrolling is already 120Hz).
+	-->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
