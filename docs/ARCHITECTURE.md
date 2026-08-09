@@ -563,3 +563,51 @@ each theme's tokens), sectioned Light/Dark, tap = apply + `Haptics.success`; cur
   all interactive elements labeled, reduceMotion honored, contrast ≥4.5:1 for text in every theme.
 - App Intents (`Platform/AppShortcuts.swift`): `AddTransactionIntent` (amount, payee, category?,
   account?) callable from Siri/Shortcuts writing through AppStore; `OpenQuickAddIntent`.
+
+## 16. Feature wiring (BINDING for all Feature/* and App/* code)
+
+**Environment injection** (done once in `NidgetApp`/`RootView`; feature views only consume):
+```swift
+// NidgetApp: .environment(AppStore.shared) .environment(ThemeManager.shared)
+//            .environment(Preferences.shared) .environment(router)   // router: @State in NidgetApp
+// RootView additionally: .environment(\.theme, themeManager.active)
+//                        .environment(\.privacyMode, store.privacyMode)
+// Feature views consume: @Environment(AppStore.self) private var store
+//                        @Environment(AppRouter.self) private var router
+//                        @Environment(\.theme) private var theme
+```
+
+**AppRouter (App/AppRouter.swift, owned by the shell agent) — exact API:**
+```swift
+enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire, settings }
+enum Route: Hashable {
+  case accounts, account(String), reports, transactionDetail(String),
+       themeGallery, simpleFINSetup, securitySettings, retirementAssumptions
+}
+@MainActor @Observable final class AppRouter {
+  var tab: AppTab = .dashboard
+  var dashboardPath = NavigationPath(); var budgetPath = NavigationPath()
+  var transactionsPath = NavigationPath(); var retirePath = NavigationPath()
+  var settingsPath = NavigationPath()
+  var quickAddPresented = false
+  var pendingTransactionFilter: TransactionQuery?   // consumed by TransactionsView .task(id:)
+  func push(_ route: Route)                         // appends to the CURRENT tab's path
+  func openAccount(_ id: String)                    // push(.account(id))
+  func openReports()                                // push(.reports)
+  func openTransactions(filter: TransactionQuery)   // set pendingTransactionFilter, tab = .transactions
+}
+```
+Every tab's top view owns `NavigationStack(path: $router.<tab>Path)` (via `@Bindable var router`)
+and applies `.withRouteDestinations()` — a modifier declared in AppRouter.swift whose
+`navigationDestination(for: Route.self)` maps: `.accounts → AccountsView()`,
+`.account(id) → AccountDetailView(accountID: id)`, `.reports → ReportsView()`,
+`.transactionDetail(id) → TransactionDetailView(transactionID: id)`,
+`.themeGallery → ThemeGalleryView()`, `.simpleFINSetup → SimpleFINSetupView()`,
+`.securitySettings → SecuritySettingsView()`, `.retirementAssumptions → AssumptionsSheet()`.
+Those view names + init signatures are therefore BINDING on their owning agents.
+`QuickAddView()` takes no arguments and is presented as a sheet by RootView.
+
+**Stashy lessons in force (docs/LESSONS_FROM_STASHY.md):** static backdrop/decoration layers keyed
+with a stable `.id(theme.id)`; never write per-frame geometry into `@State` on scroll paths; every
+`.task(id:)` guards state writes with `!Task.isCancelled`; optimistic edits carry a per-id sequence
+token checked before rollback/commit.
