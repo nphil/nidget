@@ -448,7 +448,7 @@ struct QuickAddView: View {
             .sorted { lhs, rhs in
                 lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key < rhs.key
             }
-            .map(\.key)
+            .map { $0.key }
         if top.count < 6 {
             for id in orderedValidIDs where !top.contains(id) {
                 top.append(id)

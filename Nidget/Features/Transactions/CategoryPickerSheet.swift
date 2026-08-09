@@ -144,7 +144,7 @@ struct CategoryPickerSheet: View {
                            message: "Nothing named anything like that. Try fewer letters.")
                 .padding(.top, theme.layout.spacing * 2)
         } else {
-            ForEach(matches, id: \.category.id) { match in
+            ForEach(matches) { match in
                 categoryRow(match.category, groupName: match.groupName)
             }
         }
@@ -260,15 +260,23 @@ struct CategoryPickerSheet: View {
         orderedGroups.flatMap { $0.categories.filter { !$0.hidden } }
     }
 
-    private var searchMatches: [(category: Category, groupName: String)] {
+    /// A search hit with its owning group's name; Identifiable so ForEach can diff it
+    /// (key paths cannot refer to tuple elements, so this is a nominal type on purpose).
+    private struct CategoryMatch: Identifiable {
+        var category: Category
+        var groupName: String
+        var id: String { category.id }
+    }
+
+    private var searchMatches: [CategoryMatch] {
         let query = trimmedSearch
         guard !query.isEmpty else { return [] }
-        var matches: [(category: Category, groupName: String)] = []
+        var matches: [CategoryMatch] = []
         for group in orderedGroups {
             for category in group.categories where !category.hidden {
                 if category.name.range(of: query,
                                        options: [.caseInsensitive, .diacriticInsensitive]) != nil {
-                    matches.append((category: category, groupName: group.name))
+                    matches.append(CategoryMatch(category: category, groupName: group.name))
                 }
             }
         }
