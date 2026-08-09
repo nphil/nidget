@@ -961,6 +961,7 @@ The on-disk table columns (raw SQLite, what CRDT `dataset`/`column` messages act
 | `reconciled` | `reconciled` | INTEGER (bool) default 0 | added later migration |
 | `schedule` | `schedule` | TEXT | FK → schedules.id, added by schedules migration |
 | `parent_id` | `parent_id` | TEXT | only meaningful when `isChild=1` (view nulls it out otherwise) |
+| `raw_synced_data` | `raw_synced_data` | TEXT | added by `migrations/1739139550000_bank_sync_page.sql` (`ALTER TABLE transactions ADD COLUMN raw_synced_data text`), same migration adds `accounts.last_sync` |
 
 Confirms the task's guesses precisely: **`description` is indeed the payee-id column** (not free
 text — free text lives in `imported_description`/`imported_payee`), `date` is **integer
@@ -982,16 +983,25 @@ view join in §Appendix below) rather than being rewritten in place.
 
 **`accounts`**: `id, account_id, name, balance_current, balance_available, balance_limit, mask,
 official_name, type, subtype, bank, offbudget, closed, tombstone` (base, from `init.sql`) — AQL
-public schema additionally exposes `sort_order, account_sync_source, last_reconciled, last_sync,
-bank_sync_status` (added by later migrations, **UNVERIFIED exact migration files** — confirmed
-present via `aql/schema/index.ts` only).
+public schema additionally exposes `sort_order, account_sync_source` (added by
+`migrations/1704572023730_add_account_sync_source.sql`, with a follow-up fix in
+`1704572023731_add_missing_goCardless_sync_source.sql`), `last_reconciled` (added by
+`migrations/1740506588539_add_last_reconciled_at.sql` — note: DB column is `last_reconciled`,
+populated at reconcile time), `last_sync` (added by `migrations/1739139550000_bank_sync_page.sql`),
+and `bank_sync_status` (added by `migrations/1780606215000_add_bank_sync_status.sql`).
 
 **`categories`**: `id, name, is_income, cat_group (raw) / group (public), sort_order, tombstone`
-(base `init.sql`), plus `hidden, goal_def, cleanup_def, template_settings` (public AQL schema —
-**UNVERIFIED exact migration files** for these additions).
+(base `init.sql`), plus `hidden` (added by `migrations/1685007876842_add_category_hidden.sql`),
+`goal_def` (added by `migrations/1694438752000_add_goal_targets.sql`), `cleanup_def` (added by
+`migrations/1778510362740_add_cleanup_groups_and_def.sql`, which also adds the `cleanup_groups`
+table), and `template_settings` (added by
+`migrations/1754611200000_add_category_template_settings.sql`, JSON column, default
+`{"source":"notes"}` per the AQL schema).
 
-**`category_groups`**: `id, name, is_income, sort_order, tombstone` (base), plus `hidden` (public
-AQL — **UNVERIFIED exact migration**).
+**`category_groups`**: `id, name, is_income, sort_order, tombstone` (base), plus `hidden` — same
+migration, verbatim: `ALTER TABLE categories ADD COLUMN hidden BOOLEAN NOT NULL DEFAULT 0; ALTER
+TABLE category_groups ADD COLUMN hidden BOOLEAN NOT NULL DEFAULT 0;`
+(`migrations/1685007876842_add_category_hidden.sql`).
 
 **`category_mapping`** (base `init.sql`, same merge-indirection pattern as `payee_mapping`):
 ```sql
