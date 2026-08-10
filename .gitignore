@@ -7,3 +7,4 @@ Frameworks/
 *.ipa
 *.dSYM.zip
 .swiftpm/
+.claude/settings.local.json
