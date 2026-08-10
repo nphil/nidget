@@ -359,6 +359,13 @@ final class AppStore {
                                     groupID: groupID,
                                     tokenProvider: { KeychainStore.get(KeychainKey.token) },
                                     e2eKey: e2eKey)
+
+            // A freshly-downloaded db.sqlite still carries the UPLOADING client's HLC node id
+            // in messages_clock (PROTOCOL §8.2 — metadata.json's resetClock flag exists to make
+            // importers re-mint). Mint our own before any timestamp is created, so two clients
+            // never share a node id. Reopening an existing local file (bootstrap) must NOT reset.
+            try await engine.resetNodeID()
+
             self.dbQueue = queue
             self.engine = engine
 
@@ -716,6 +723,13 @@ final class AppStore {
                       failureMessage: "Couldn't update the transaction")
     }
 
+    /// Locks (or unlocks) a batch of transactions as reconciled in one enqueue — reconciliation
+    /// confirms many rows at once, so this performs a single write batch rather than N calls.
+    func setReconciled(ids: [String], reconciled: Bool) async {
+        await perform(ids.flatMap { Mutations.setReconciled(id: $0, reconciled: reconciled) },
+                      failureMessage: "Couldn't reconcile the transactions")
+    }
+
     func setBudgetAmount(month: BudgetMonth, categoryID: String, amount: Money) async {
         await perform(Mutations.setBudget(month: month, categoryID: categoryID, amount: amount),
                       failureMessage: "Couldn't update the budget")
@@ -796,7 +810,11 @@ final class AppStore {
         do {
             let timestamps = try await engine.nextTimestamps(count: writes.count)
             let messages = Mutations.messages(writes, timestamps: timestamps)
-            await engine.enqueue(messages)
+            guard await engine.enqueue(messages) else {
+                lastError = AppError(message: failureMessage,
+                                     detail: "The change couldn't be written to the budget file.")
+                return
+            }
             await refreshAll()
         } catch {
             lastError = AppError(message: failureMessage, detail: error.localizedDescription)
@@ -918,7 +936,11 @@ final class AppStore {
 
             if !writes.isEmpty {
                 let timestamps = try await engine.nextTimestamps(count: writes.count)
-                await engine.enqueue(Mutations.messages(writes, timestamps: timestamps))
+                guard await engine.enqueue(Mutations.messages(writes, timestamps: timestamps)) else {
+                    lastError = AppError(message: "SimpleFIN import failed",
+                                         detail: "The imported transactions couldn't be written to the budget file.")
+                    return nil
+                }
                 await refreshAll()
             }
             Self.log.info("SimpleFIN import: \(plan.summary.imported) new, \(plan.summary.skipped) duplicate(s), \(plan.summary.unmapped.count) unmapped account(s)")

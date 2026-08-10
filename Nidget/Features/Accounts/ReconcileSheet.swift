@@ -9,16 +9,11 @@ import SwiftUI
 // `AppStore.setCleared`, the same optimistic + sequence-token dance as AccountDetailView, but
 // settling with a full reload rather than a manual rollback (reconciliation is a deliberate,
 // low-frequency flow, not a scroll hot path, so re-querying the account is cheap and simplest).
-// When the diff hits zero, a "Balances!" state plays a `.bounce` symbol effect.
-//
-// IMPORTANT LIMIT (see this feature's final report): `AppStore` has no reconcile method, and
-// `TransactionDraft` carries no `reconciled` field — there is no existing API that can persist
-// `Transaction.reconciled = true`. Per instructions this gap is documented rather than invented
-// around (no new AppStore method, and no misleading `setCleared`/`updateTransaction` loop that
-// would silently fail to lock anything). Confirm therefore only finalizes the LOCAL reconciliation
-// flow once the account is proven balanced — the cleared states the user set while reviewing here
-// are already real, persisted `setCleared` writes; only the immutable "reconciled" lock is
-// unavailable.
+// When the diff hits zero, a "Balances!" state plays a `.bounce` symbol effect, and Confirm
+// persists the lock: every cleared, not-yet-reconciled transaction in the account is marked
+// `reconciled` via `AppStore.setReconciled` in one batched write (ARCHITECTURE's "marks
+// cleared→reconciled" promise) before the sheet dismisses — the durable lock that
+// AccountDetailView's rows render and that disables their cleared-toggle swipe.
 
 struct ReconcileSheet: View {
     let accountID: String
@@ -213,7 +208,12 @@ struct ReconcileSheet: View {
         guard isBalanced, !isConfirming else { return }
         isConfirming = true
         Haptics.success()
-        dismiss()
+        Task {
+            let all = await store.transactions(TransactionQuery(accountID: accountID, limit: Self.fetchLimit))
+            let ids = all.filter { $0.cleared && !$0.reconciled }.map(\.id)
+            await store.setReconciled(ids: ids, reconciled: true)
+            dismiss()
+        }
     }
 }
 

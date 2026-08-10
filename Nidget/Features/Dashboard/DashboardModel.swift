@@ -154,6 +154,15 @@ struct DashboardItem: Codable, Identifiable, Equatable {
     var span: WidgetSpan
 }
 
+/// Element wrapper that swallows a single item's decode failure (e.g. a widget kind added in a
+/// newer app version) so one unrecognized entry doesn't wipe the whole stored layout.
+private struct LenientDashboardItem: Decodable {
+    let item: DashboardItem?
+    init(from decoder: Decoder) {
+        item = try? DashboardItem(from: decoder)
+    }
+}
+
 // MARK: - DashboardModel
 //
 // Owns the widget layout: ordering, spans, edit mode, and persistence to
@@ -273,8 +282,17 @@ final class DashboardModel {
             return defaultLayout
         }
         do {
-            let decoded = try JSONDecoder().decode([DashboardItem].self, from: data)
-            return sanitized(decoded)
+            let decoded = try JSONDecoder().decode([LenientDashboardItem].self, from: data)
+            let items = decoded.compactMap(\.item)
+            if items.count < decoded.count {
+                log.notice("Dropped \(decoded.count - items.count) unrecognized stored dashboard item(s)")
+            }
+            if items.isEmpty, !decoded.isEmpty {
+                // Every stored item was unrecognized — treat it like a failed decode, not an
+                // intentionally empty layout.
+                return defaultLayout
+            }
+            return sanitized(items)
         } catch {
             log.notice("Stored dashboard layout failed to decode; using the default layout")
             return defaultLayout

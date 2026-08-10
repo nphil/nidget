@@ -12,6 +12,7 @@ import Foundation
 //   transactions:  acct (NOT "account"), amount (integer cents), description (the PAYEE id —
 //                  free text lives in imported_description), category, notes, date (integer
 //                  yyyymmdd), cleared / reconciled / tombstone (integer 0/1),
+//                  sort_order (REAL, epoch-millis at creation),
 //                  financial_id (NOT "imported_id"), imported_description (NOT "imported_payee")
 //   payees:        name; plus a payee_mapping self-row (id → targetId) because Actual's
 //                  transaction views resolve `transactions.description` THROUGH payee_mapping
@@ -77,6 +78,10 @@ enum Mutations {
         put("acct", .string(draft.accountID))
         put("amount", .number(Double(draft.amount.cents)))
         put("date", .number(Double(draft.date.raw)))
+        // PROTOCOL §8.4: sort_order defaults to Date.now() (epoch millis) at CREATION in
+        // Actual's app layer — the raw SQLite column has no default, so without this write the
+        // row gets NULL and sinks/interleaves unstably in every client's same-day ordering.
+        put("sort_order", .number((Date().timeIntervalSince1970 * 1000).rounded()))
         if let payeeID = draft.payeeID, !payeeID.isEmpty {
             put("description", .string(payeeID))
         }
@@ -114,6 +119,11 @@ enum Mutations {
     /// Single-cell cleared toggle.
     static func setCleared(id: String, cleared: Bool) -> [CellWrite] {
         [CellWrite(dataset: "transactions", row: id, column: "cleared", value: bool(cleared))]
+    }
+
+    /// Single-cell reconciled toggle — the lock applied when an account reconciles.
+    static func setReconciled(id: String, reconciled: Bool) -> [CellWrite] {
+        [CellWrite(dataset: "transactions", row: id, column: "reconciled", value: bool(reconciled))]
     }
 
     /// Generic field update on any dataset — the raw building block behind the typed helpers.

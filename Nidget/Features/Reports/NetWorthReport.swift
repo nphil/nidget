@@ -174,7 +174,11 @@ struct NetWorthReport: View {
     }
 
     private func compactMoney(_ dollars: Double) -> String {
-        CurrencyFormatter.string(Money(cents: Int64((dollars * 100).rounded())), format: .compact)
+        // Clamp well inside Int64 before converting (LESSONS_FROM_STASHY §2: `isFinite` alone
+        // doesn't make a Double→Int conversion safe).
+        let cents = (dollars * 100).rounded()
+        let clamped = cents.isFinite ? min(max(cents, -9e17), 9e17) : 0
+        return CurrencyFormatter.string(Money(cents: Int64(clamped)), format: .compact)
     }
 
     // MARK: Load

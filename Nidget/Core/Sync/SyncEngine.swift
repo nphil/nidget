@@ -56,7 +56,13 @@ enum SyncError: Error, LocalizedError, Equatable {
 ///   ARCHITECTURE §8 pending-outbox note), records them in `messages_crdt` + merkle, stores
 ///   them in the `local_pending_messages` outbox, then triggers a debounced sync.
 /// - `fullSync` runs the §6.4 round trip: push pending, apply the response, merkle-verify,
-///   retry once from the divergence point, persist clock + merkle.
+///   retry once from the divergence point.
+/// - Every applied batch — domain rows, `messages_crdt`, the outbox change, and the
+///   `messages_clock` clock+merkle row — commits in ONE SQLite transaction (§6.1 / §6.3 step 5),
+///   and the in-memory merkle is updated only after the commit succeeds (§6.3 step 6), so a
+///   crash mid-batch can never strand a message outside the outbox or the persisted trie.
+/// - `resetNodeID` re-mints this client's HLC node id after a fresh server download (§8.2's
+///   `resetClock` signal) so two clients never share a node id.
 ///
 /// Cursor persistence: Actual keeps `lastSyncedTimestamp` in its *prefs* store, NOT inside the
 /// `messages_clock` JSON — `serializeClock` (PROTOCOL §3.7) fixes that JSON to exactly
@@ -120,37 +126,72 @@ actor SyncEngine {
         try await nextTimestamps(count)
     }
 
+    // MARK: - Node identity
+
+    /// Re-mints this client's HLC node id, keeping the restored logical time and merkle.
+    /// Must be called once right after a fresh server download, BEFORE any timestamp is minted:
+    /// the downloaded `db.sqlite` still carries the uploading client's `messages_clock` row, and
+    /// two clients sharing a node id can mint identical 46-char timestamps whose edits dedupe
+    /// each other away (PROTOCOL §3.2 / §8.2 — `metadata.json`'s `resetClock` flag exists
+    /// precisely to make importers re-mint). Reopening an existing local file must NOT call
+    /// this — that path keeps the node id it already owns.
+    func resetNodeID() async throws {
+        let clock = try await ensureState()
+        let current = clock.current
+        clock.current = HLCTimestamp(millis: current.millis,
+                                     counter: current.counter,
+                                     node: HLCClock.makeClientId())
+        let clockString = clock.current.description
+        let merkleJSON = merkle.toJSON()
+        try await dbQueue.write { db -> Void in
+            try db.saveClockState(clock: clockString, merkle: merkleJSON)
+        }
+    }
+
     // MARK: - Local mutations
 
     /// Applies locally-created messages (from Mutations) per PROTOCOL §6.3: domain apply + append
-    /// to `messages_crdt` (via `db.apply`, LWW), insert into the merkle, persist clock + merkle,
-    /// store into the pending outbox, then fire a debounced sync. Everything local happens before
-    /// any network — offline loses nothing (ARCHITECTURE §8).
+    /// to `messages_crdt` (LWW), insert into the merkle, store into the pending outbox, and
+    /// persist clock + merkle — ALL inside one SQLite transaction (§6.3 step 5), so a crash can
+    /// never leave a message applied but missing from the outbox or the persisted trie.
+    /// Everything local happens before any network — offline loses nothing (ARCHITECTURE §8).
     ///
-    /// Non-throwing by contract: failures are logged; the debounced sync (or the next manual
-    /// sync) retries the outbox.
-    func enqueue(_ messages: [CRDTMessage]) async {
-        guard !messages.isEmpty else { return }
+    /// Returns false when the batch could not be committed — nothing was applied or queued, the
+    /// failure is logged, and AppStore surfaces it via `lastError`. The debounced sync fires
+    /// only on success.
+    @discardableResult
+    func enqueue(_ messages: [CRDTMessage]) async -> Bool {
+        guard !messages.isEmpty else { return true }
         do {
-            _ = try await ensureState()
-            let newTimestamps = try await dbQueue.write { db -> [String] in
-                var new: [String] = []
-                for message in messages {
-                    // Exact-duplicate timestamps are dropped by db.apply without re-entering
-                    // messages_crdt (§6.3 step 2) — track "actually new" here so the merkle
-                    // never XORs the same hash twice (double-insert would REMOVE it).
-                    if try db.haveTimestamp(message.timestamp) { continue }
-                    _ = try db.apply(message, insertOnly: false)
-                    new.append(message.timestamp)
+            let clock = try await ensureState()
+            let clockString = clock.current.description
+            let newTrie = try await dbQueue.write { db -> MerkleTrie in
+                try db.transaction {
+                    var new: [String] = []
+                    for message in messages {
+                        // Exact-duplicate timestamps are dropped by the apply without re-entering
+                        // messages_crdt (§6.3 step 2) — track "actually new" here so the merkle
+                        // never XORs the same hash twice (double-insert would REMOVE it).
+                        if try db.haveTimestamp(message.timestamp) { continue }
+                        _ = try db.applyInTransaction(message, insertOnly: false)
+                        new.append(message.timestamp)
+                    }
+                    try db.enqueuePendingInTransaction(messages)
+                    // Fold into the trie PERSISTED in this same transaction (not a pre-await
+                    // snapshot): batches that interleave on this actor each accumulate on top
+                    // of the other's committed state instead of clobbering it.
+                    let persisted = (try db.clockState())?.merkle ?? "{}"
+                    let trie = Self.inserting(new, into: MerkleTrie.fromJSON(persisted))
+                    try db.saveClockState(clock: clockString, merkle: trie.toJSON())
+                    return trie
                 }
-                try db.enqueuePending(messages)
-                return new
             }
-            recordInMerkle(newTimestamps)
-            await persistClockState()
+            merkle = newTrie  // §6.3 step 6: in-memory state only after the commit succeeded
             scheduleDebouncedSync()
+            return true
         } catch {
             Self.log.error("enqueue failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -234,8 +275,8 @@ actor SyncEngine {
             }
         }
 
-        // Persist clock + merkle (§6.3 step 5's INSERT OR REPLACE into messages_clock).
-        await persistClockState()
+        // Clock + merkle were persisted inside each round's atomic batch (§6.3 step 5) — no
+        // separate persist here, so a crash can never split data from bookkeeping.
 
         // §6.4: only a fully-converged sync advances the lastSyncedTimestamp cursor.
         if fullyConverged {
@@ -262,7 +303,7 @@ actor SyncEngine {
     }
 
     private struct AppliedBatch: Sendable {
-        var newTimestamps: [String]
+        var merkle: MerkleTrie
         var changedDatasets: Set<String>
     }
 
@@ -346,23 +387,32 @@ actor SyncEngine {
             throw SyncError.clock(error)
         }
 
-        // Apply through the DB queue (§6.2 insert-or-update LWW inside db.apply), collect which
-        // timestamps are genuinely new (merkle inserts) and which datasets changed. A successful
-        // POST means the server stored our batch — clear those outbox rows (ack).
+        // §6.3 step 5: apply the whole batch in ONE SQLite transaction — domain rows +
+        // messages_crdt (§6.2 insert-or-update LWW inside applyInTransaction), the outbox ack
+        // (a successful POST means the server stored our batch — clear those rows), and the
+        // clock+merkle persist. The merkle folds into the trie persisted in this same
+        // transaction, so batches that interleave on this actor accumulate instead of
+        // clobbering each other.
         let sentTimestamps = outbound.map(\.timestamp)
+        let clockString = clock.current.description
         let batch = try await dbQueue.write { db -> AppliedBatch in
-            var newTimestamps: [String] = []
-            var changedDatasets: Set<String> = []
-            for message in incoming {
-                let isNew = !(try db.haveTimestamp(message.timestamp))
-                let changedDomain = try db.apply(message, insertOnly: false)
-                if isNew { newTimestamps.append(message.timestamp) }
-                if changedDomain { changedDatasets.insert(message.dataset) }
+            try db.transaction {
+                var newTimestamps: [String] = []
+                var changedDatasets: Set<String> = []
+                for message in incoming {
+                    let isNew = !(try db.haveTimestamp(message.timestamp))
+                    let changedDomain = try db.applyInTransaction(message, insertOnly: false)
+                    if isNew { newTimestamps.append(message.timestamp) }
+                    if changedDomain { changedDatasets.insert(message.dataset) }
+                }
+                try db.clearPendingInTransaction(sentTimestamps)
+                let persisted = (try db.clockState())?.merkle ?? "{}"
+                let trie = Self.inserting(newTimestamps, into: MerkleTrie.fromJSON(persisted))
+                try db.saveClockState(clock: clockString, merkle: trie.toJSON())
+                return AppliedBatch(merkle: trie, changedDatasets: changedDatasets)
             }
-            try db.clearPending(sentTimestamps)
-            return AppliedBatch(newTimestamps: newTimestamps, changedDatasets: changedDatasets)
         }
-        recordInMerkle(batch.newTimestamps)
+        merkle = batch.merkle  // §6.3 step 6: in-memory state only after the commit succeeded
 
         return RoundResult(serverMerkle: MerkleTrie.fromJSON(response.merkle),
                            pushed: outbound.count,
@@ -406,36 +456,20 @@ actor SyncEngine {
         return fresh
     }
 
-    /// Inserts freshly-recorded timestamps into the merkle, then prunes once per batch —
+    /// Pure fold of freshly-recorded timestamps into a merkle trie, pruning once per batch —
     /// mirroring `applyMessages`' reduce-style `merkle.insert` + single `merkle.prune`
     /// (PROTOCOL §4.4: always use insert's return value; prune keeps the 2 most recent
-    /// children per level). Synchronous on the actor so read-modify-write can't interleave.
-    private func recordInMerkle(_ timestamps: [String]) {
-        guard !timestamps.isEmpty else { return }
-        var trie = merkle
+    /// children per level). Static + pure so the atomic batch closures can call it off the
+    /// actor; callers assign the result to `merkle` only after their transaction commits.
+    private static func inserting(_ timestamps: [String], into trie: MerkleTrie) -> MerkleTrie {
+        guard !timestamps.isEmpty else { return trie }
+        var result = trie
         for string in timestamps {
             if let ts = HLCTimestamp.parse(string) {
-                trie = trie.inserting(ts)
+                result = result.inserting(ts)
             }
         }
-        merkle = trie.pruned()
-    }
-
-    /// Persists the current clock + merkle snapshot as the single `messages_clock` row
-    /// (§3.7 serializeClock shape, written by `BudgetDatabase.saveClockState`). Failures are
-    /// logged, not thrown: the next persist (every enqueue/sync) self-heals, and a stale stored
-    /// merkle only costs an extra §6.4 divergence round.
-    private func persistClockState() async {
-        guard let clock else { return }
-        let clockString = clock.current.description
-        let merkleJSON = merkle.toJSON()
-        do {
-            try await dbQueue.write { db -> Void in
-                try db.saveClockState(clock: clockString, merkle: merkleJSON)
-            }
-        } catch {
-            Self.log.error("failed to persist clock state: \(error.localizedDescription, privacy: .public)")
-        }
+        return result.pruned()
     }
 
     // MARK: - Last-synced cursor (see type doc for the storage rationale)

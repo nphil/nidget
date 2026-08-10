@@ -404,31 +404,38 @@ final class BudgetDatabase {
     /// recorded for merkle correctness but not applied.
     func apply(_ message: CRDTMessage, insertOnly: Bool) throws -> Bool {
         try db.transaction {
-            let existing = try db.scalar("""
-                SELECT MAX(timestamp) FROM messages_crdt
-                WHERE dataset = ? AND "row" = ? AND "column" = ?
-                """, [.text(message.dataset), .text(message.row), .text(message.column)])
-            var existingTimestamp: String?
-            if case .text(let ts)? = existing {
-                existingTimestamp = ts
-            }
-            if existingTimestamp == message.timestamp {
-                return false
-            }
-
-            let wins = existingTimestamp.map { message.timestamp > $0 } ?? true
-            var changed = false
-            if wins && !insertOnly {
-                changed = try applyToDomain(message)
-            }
-
-            try db.run("""
-                INSERT OR IGNORE INTO messages_crdt (timestamp, dataset, "row", "column", value)
-                VALUES (?, ?, ?, ?, ?)
-                """, [.text(message.timestamp), .text(message.dataset), .text(message.row),
-                      .text(message.column), .text(message.value.encoded)])
-            return changed
+            try applyInTransaction(message, insertOnly: insertOnly)
         }
+    }
+
+    /// `apply(_:insertOnly:)` minus the transaction wrapper — for composing a whole batch
+    /// (applies + outbox + clock) into ONE commit via `transaction(_:)`. Only call inside a
+    /// `transaction(_:)` body; standalone callers use `apply(_:insertOnly:)`.
+    func applyInTransaction(_ message: CRDTMessage, insertOnly: Bool) throws -> Bool {
+        let existing = try db.scalar("""
+            SELECT MAX(timestamp) FROM messages_crdt
+            WHERE dataset = ? AND "row" = ? AND "column" = ?
+            """, [.text(message.dataset), .text(message.row), .text(message.column)])
+        var existingTimestamp: String?
+        if case .text(let ts)? = existing {
+            existingTimestamp = ts
+        }
+        if existingTimestamp == message.timestamp {
+            return false
+        }
+
+        let wins = existingTimestamp.map { message.timestamp > $0 } ?? true
+        var changed = false
+        if wins && !insertOnly {
+            changed = try applyToDomain(message)
+        }
+
+        try db.run("""
+            INSERT OR IGNORE INTO messages_crdt (timestamp, dataset, "row", "column", value)
+            VALUES (?, ?, ?, ?, ?)
+            """, [.text(message.timestamp), .text(message.dataset), .text(message.row),
+                  .text(message.column), .text(message.value.encoded)])
+        return changed
     }
 
     func haveTimestamp(_ ts: String) throws -> Bool {
@@ -479,6 +486,18 @@ final class BudgetDatabase {
         try db.run("INSERT OR REPLACE INTO messages_clock (id, clock) VALUES (1, ?)", [.text(json)])
     }
 
+    // MARK: - Atomic message batches (used by SyncEngine)
+
+    /// Runs `body` as ONE SQLite transaction (BEGIN IMMEDIATE, rolled back on throw) so an
+    /// entire message batch — domain rows, `messages_crdt`, the outbox, and `messages_clock` —
+    /// commits or disappears together (PROTOCOL §6.1 / §6.3 step 5). `SQLiteDB.transaction` is
+    /// not reentrant, so inside `body` use only the `…InTransaction` variants plus
+    /// single-statement helpers (`haveTimestamp`, `clockState`, `saveClockState`) — never
+    /// `apply` / `enqueuePending` / `clearPending` themselves.
+    func transaction<T>(_ body: () throws -> T) throws -> T {
+        try db.transaction(body)
+    }
+
     // MARK: - Offline outbox (used by SyncEngine's pending queue)
 
     /// Messages applied locally but not yet confirmed by the server, ascending by timestamp —
@@ -497,13 +516,18 @@ final class BudgetDatabase {
     func enqueuePending(_ msgs: [CRDTMessage]) throws {
         guard !msgs.isEmpty else { return }
         try db.transaction {
-            for message in msgs {
-                try db.run("""
-                    INSERT OR REPLACE INTO local_pending_messages (timestamp, dataset, "row", "column", value)
-                    VALUES (?, ?, ?, ?, ?)
-                    """, [.text(message.timestamp), .text(message.dataset), .text(message.row),
-                          .text(message.column), .text(message.value.encoded)])
-            }
+            try enqueuePendingInTransaction(msgs)
+        }
+    }
+
+    /// `enqueuePending(_:)` minus the transaction wrapper — for `transaction(_:)` batches only.
+    func enqueuePendingInTransaction(_ msgs: [CRDTMessage]) throws {
+        for message in msgs {
+            try db.run("""
+                INSERT OR REPLACE INTO local_pending_messages (timestamp, dataset, "row", "column", value)
+                VALUES (?, ?, ?, ?, ?)
+                """, [.text(message.timestamp), .text(message.dataset), .text(message.row),
+                      .text(message.column), .text(message.value.encoded)])
         }
     }
 
@@ -512,9 +536,14 @@ final class BudgetDatabase {
     func clearPending(_ timestamps: [String]) throws {
         guard !timestamps.isEmpty else { return }
         try db.transaction {
-            for timestamp in timestamps {
-                try db.run("DELETE FROM local_pending_messages WHERE timestamp = ?", [.text(timestamp)])
-            }
+            try clearPendingInTransaction(timestamps)
+        }
+    }
+
+    /// `clearPending(_:)` minus the transaction wrapper — for `transaction(_:)` batches only.
+    func clearPendingInTransaction(_ timestamps: [String]) throws {
+        for timestamp in timestamps {
+            try db.run("DELETE FROM local_pending_messages WHERE timestamp = ?", [.text(timestamp)])
         }
     }
 
