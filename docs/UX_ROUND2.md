@@ -68,7 +68,7 @@ spending affect that?" Keep RetirementPlanner math; redesign presentation + inpu
   safely provides per month (value * SWR / 12 via AmountText). Segmented toggle
   Simple / Detailed: Simple hides the Monte Carlo bands, Detailed shows p10-p90 bands +
   success probability row. Default Simple (owner found bands confusing).
-- **"What moves the needle" card**: three computed rows (each re-runs the planner):
+- **"What would help" card**: three computed rows (each re-runs the planner):
   +$100/mo contributions, -$100/mo spending (note it helps twice: smaller target and more
   saved), +1% return. Each row: lever, "retire ~N months earlier", chevron applies it to
   the what-if state.

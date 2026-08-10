@@ -17,7 +17,7 @@ enum RetirementLeverShift: Equatable, Sendable {
     case alreadyThere
 }
 
-/// The three lever results the "What moves the needle" card renders.
+/// The three lever results the "What would help" card renders.
 struct RetirementLeverOutcomes: Equatable, Sendable {
     var saveMore: RetirementLeverShift
     var spendLess: RetirementLeverShift
@@ -110,7 +110,7 @@ enum RetirementLeverMath {
 
 // MARK: - RetirementLeversCard
 //
-// "What moves the needle": three computed rows, each showing what one concrete change does to
+// "What would help": three computed rows, each showing what one concrete change does to
 // the retirement date. Tapping a row applies that change to the what-if sliders, so the whole
 // screen (hero age, chart, sentence) animates to the new plan.
 
@@ -128,7 +128,7 @@ struct RetirementLeversCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing) {
-            cardLabel("What Moves the Needle")
+            cardLabel("What Would Help")
             leverRow(icon: "banknote",
                      title: "Save \(stepAmount) more each month",
                      note: nil,

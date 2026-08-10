@@ -12,10 +12,8 @@ import SwiftUI
 // reloads can't snap the dot back.
 //
 // The Uncategorized chip can scroll out of view in the unified row, so while it's active a small
-// warning-tinted reminder dot sits at the top-leading edge of this screen, immediately under the
-// search field (SwiftUI's `.searchable` gives feature code no supported hook to decorate the
-// system search bar itself, so this is the closest equivalent that's reachable with public API);
-// tapping it clears the filter.
+// warning-tinted reminder dot sits just leading of the scrollable chips, outside the ScrollView so
+// it never scrolls away with them; tapping it clears the filter.
 
 struct TransactionsView: View {
     @Environment(AppStore.self) private var store
@@ -78,12 +76,6 @@ struct TransactionsView: View {
         .searchable(text: $searchText,
                     placement: .navigationBarDrawer(displayMode: .automatic),
                     prompt: "Payee or notes")
-        .overlay(alignment: .topLeading) {
-            searchReminderDot
-                .padding(.leading, theme.layout.cardPadding - 4)
-                .offset(y: -6)
-                .animation(reduceMotion ? nil : theme.motion.snappy, value: uncategorizedOnly)
-        }
         .task(id: searchText) { await debounceSearch() }
         .task(id: router.pendingTransactionFilter != nil) { consumePendingFilter() }
         .task(id: filterKey) {
@@ -122,6 +114,14 @@ struct TransactionsView: View {
     // two scroll regions again, which is exactly the bug being fixed. The account/All chips
     // below intentionally match ChipPicker's own visual language (capsule, accent fill selected,
     // matchedGeometryEffect slide).
+    //
+    // `searchReminderDot` sits leading of the ScrollView, outside it, rather than as a
+    // screen-level overlay: an earlier version floated it at a fixed offset over the top-leading
+    // corner of the screen to stay visible after the Uncategorized chip scrolled away, but that
+    // offset was measured against the content area (below the system search field, not the
+    // filter row), so it landed on top of the "All" chip — a real, not just small-screen, overlap
+    // that also stole its taps. Laying the dot out in-flow, before the scrollable chips, keeps it
+    // permanently visible without depending on any fixed pixel offset.
 
     private var filterBar: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.5) {
@@ -135,17 +135,21 @@ struct TransactionsView: View {
     }
 
     private var unifiedFilterRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: theme.layout.spacing * 0.6) {
-                accountChip(id: "", label: "All")
-                ForEach(openAccounts) { account in
-                    accountChip(id: account.id, label: account.name)
+        HStack(spacing: theme.layout.spacing * 0.5) {
+            searchReminderDot
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: theme.layout.spacing * 0.6) {
+                    accountChip(id: "", label: "All")
+                    ForEach(openAccounts) { account in
+                        accountChip(id: account.id, label: account.name)
+                    }
+                    filterSeparatorDot
+                    uncategorizedChip
                 }
-                filterSeparatorDot
-                uncategorizedChip
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
         }
+        .animation(reduceMotion ? nil : theme.motion.snappy, value: uncategorizedOnly)
     }
 
     private var openAccounts: [Account] {

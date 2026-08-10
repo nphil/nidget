@@ -6,8 +6,8 @@ import SwiftUI
 // and the app itself, built from the pages in GuidePages.swift. Two presentation modes:
 //
 // - Cover (default): RootView presents it full-screen after the first successful sync.
-//   Shows a Skip button top-right; dismissing marks `Preferences.hasSeenGuide` (RootView owns
-//   that write in its cover's onDismiss).
+//   Shows a Skip button top-right; RootView marks `Preferences.hasSeenGuide` when it presents
+//   the cover, so one dismissal is final.
 // - Embedded (`init(embedded: true)`): pushed via `Route.guide` from Settings' "How Nidget
 //   Works" card, with a normal navigation back button instead of Skip.
 //

@@ -88,7 +88,12 @@ struct BudgetView: View {
             MonthPickerSheet(currentMonth: store.currentMonth) { month in
                 selectMonth(month)
             }
-            .presentationDetents([.height(360)])
+            // Header + year stepper + a 4-row month grid need ~390pt even in the default
+            // theme, and several catalog themes run wider spacing/cardPadding than that
+            // (up to spacing: 16 / cardPadding: 20) — a plain .height(360) clipped the bottom
+            // month row under those themes and at larger Dynamic Type sizes. .large lets a
+            // drag up cover whatever a fixed height doesn't.
+            .presentationDetents([.height(420), .large])
             .presentationDragIndicator(.visible)
         }
     }

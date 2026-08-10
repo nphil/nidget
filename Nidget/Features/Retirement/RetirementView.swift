@@ -35,7 +35,7 @@ enum RetirementConfigCodec {
 // am I, and how does my spending affect that?" (docs/UX_ROUND2.md §2). Layout, top to bottom:
 // countdown hero ("Retirement at ~58" + years to go, FI ring second), the spending card with a
 // live delta slider and a computed plain sentence, the interactive age chart
-// (`RetirementChartCard`), the "What moves the needle" levers, the milestones row, the what-if
+// (`RetirementChartCard`), the "What would help" levers, the milestones row, the what-if
 // sliders, and an optional on-device "Explain my plan" card when a generation model is
 // installed.
 //

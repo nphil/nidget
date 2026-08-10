@@ -524,6 +524,49 @@ private extension Edge {
     }
 }
 
+// MARK: - Shared edit/swipe gestures for multi-target widgets
+//
+// AccountsListWidget's larger spans (s2x1/s2x2) list several independently-navigable account
+// rows rather than the single whole-card `action` every other widget hands to WidgetCardButton,
+// so it can't just wrap itself in one WidgetCardButton. This pulls WidgetCardButton's long-
+// press-to-edit and swipe-glow halves (not its tap gating, which assumes exactly one action) into
+// a reusable modifier so a widget like that still participates in the same long-press/swipe
+// language as every WidgetCardButton-backed tile.
+
+extension View {
+    /// Long-press-to-edit + swipe-glow reporting, without a whole-card tap action. Attach to a
+    /// widget's own outer container when it hosts multiple internal tap targets of its own
+    /// instead of routing through `WidgetCardButton`.
+    func widgetCardEditGestures() -> some View {
+        modifier(WidgetCardEditGestureModifier())
+    }
+}
+
+private struct WidgetCardEditGestureModifier: ViewModifier {
+    @Environment(\.dashboardEnterEdit) private var enterEdit
+    @Environment(\.dashboardSwipeGlow) private var reportSwipe
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(swipeGesture)
+            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 10) {
+                Haptics.tap()
+                enterEdit?()
+            }
+    }
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onEnded { value in
+                let translation = value.translation
+                let magnitude = (translation.width * translation.width
+                                  + translation.height * translation.height).squareRoot()
+                guard magnitude > 30 else { return }
+                reportSwipe?(translation)
+            }
+    }
+}
+
 /// A whole-card tap target with the theme's card treatment and pressed-state feedback.
 /// Content expands to fill the tile so the card always matches its grid frame.
 ///

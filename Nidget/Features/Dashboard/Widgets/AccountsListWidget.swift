@@ -5,6 +5,11 @@ import SwiftUI
 // The biggest balances at a glance. 1x1 collapses to a total + open-account count (whole card
 // opens Accounts); larger spans list the top accounts as compact rows that deep-link straight
 // into each account. Rows stretch to share the tile's height so tap targets stay generous.
+//
+// The larger spans can't route through `WidgetCardButton` like every other widget — its rows
+// deep-link to different accounts, not one whole-card action — so `listBody` attaches
+// `widgetCardEditGestures()` (DashboardGrid.swift) directly to keep the same long-press-to-edit
+// and swipe-glow behavior every other tile gets (UX_ROUND2 §5 follow-up).
 
 struct AccountsListWidget: View {
     let span: WidgetSpan
@@ -81,6 +86,8 @@ struct AccountsListWidget: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .themedCard()
+        .contentShape(theme.cardShape)
+        .widgetCardEditGestures()
         .animation(reduceMotion ? nil : theme.motion.spring, value: openAccounts)
     }
 

@@ -42,8 +42,10 @@ private struct RootContentView: View {
     /// failed `selectFile` causes, so the recreated FilePickView can still show the failure.
     @State private var filePickError: String?
 
-    /// Presents the Guide over the first `.ready` state; any dismissal (Skip or "Start
-    /// budgeting") marks `Preferences.hasSeenGuide` so it never auto-presents again.
+    /// Presents the Guide over the first `.ready` state. `Preferences.hasSeenGuide` is marked
+    /// at presentation time, not on dismiss: dismissing a `.fullScreenCover` re-fires the
+    /// presenting view's `.onAppear` before any `onDismiss` closure runs, so a dismiss-time
+    /// write would let that re-fired onAppear present the Guide a second time.
     @State private var showGuide = false
 
     private static let quickAddTabs: [AppTab] = [.dashboard, .budget, .transactions]
@@ -112,14 +114,17 @@ private struct RootContentView: View {
             QuickAddView()
                 .presentationDetents([.height(560), .large])
         }
-        .fullScreenCover(isPresented: $showGuide, onDismiss: { preferences.hasSeenGuide = true }) {
+        .fullScreenCover(isPresented: $showGuide) {
             GuideView()
         }
         .onAppear {
             // readyView only exists while setup == .ready, so this fires exactly when the app
             // first becomes usable — right after the first sync, or on a later cold launch if
-            // the Guide was never seen.
+            // the Guide was never seen. hasSeenGuide is set here, at presentation time, because
+            // this onAppear fires again while the cover is still dismissing — marking the
+            // preference on dismiss instead would re-present the Guide right after Skip.
             if !preferences.hasSeenGuide {
+                preferences.hasSeenGuide = true
                 showGuide = true
             }
         }
