@@ -26,29 +26,45 @@ taps.
   works great
 - Optional: a [SimpleFIN Bridge](https://beta-bridge.simplefin.org) setup token for bank import
 
-## Building
+## Installation
+
+Nidget ships as an **unsigned IPA** you sideload onto your own device (it is not an App Store app),
+so you need a sideloading tool: **[Feather](https://github.com/khcrysalis/Feather) /
+[AltStore](https://altstore.io) / SideStore**.
+
+- **Option A — add the app source** (recommended; you get updates in-app): add this URL as a source
+  in Feather/AltStore/SideStore, then install **Nidget** from it:
+
+  ```
+  https://raw.githubusercontent.com/nphil/nidget/main/apps.json
+  ```
+
+- **Option B — direct download:** grab `Nidget.ipa` from the
+  [latest release](https://github.com/nphil/nidget/releases/latest) and sideload it.
+
+Then jump to [First run](#first-run) to point the app at your server.
+
+## Building from source
 
 1. Clone the repo and open `Nidget.xcodeproj` in Xcode.
 2. Select the *Nidget* target → Signing & Capabilities → pick your team (automatic signing).
 3. Build & run on your device.
 
-No packages to resolve — the app has zero third-party dependencies.
+No packages to resolve — the app has zero third-party dependencies. New `.swift` files under
+`Nidget/` are picked up automatically (the project uses filesystem-synchronized groups, so there is
+no file list to maintain in the pbxproj).
 
-## Sideloading (Feather / AltStore)
+### Release pipeline
 
-CI builds an **unsigned IPA** on every push to `main` (same pipeline as Stashy):
+`.github/workflows/ios-build.yml` runs on every push to `main`: it bumps the version, builds
+unsigned (`CODE_SIGNING_ALLOWED=NO`), fails fast on real compiler diagnostics (annotated inline on
+the diff), verifies the packaged `.app` actually contains an executable, publishes a GitHub Release
+with `Nidget.ipa`, and patches `apps.json` — which is what Option A above reads, so a push is all it
+takes for the app to offer an update on your phone. You can also run it by hand from
+Actions → *Build IPA* → *Run workflow*.
 
-- `.github/workflows/ios-build.yml` bumps the version, builds unsigned
-  (`CODE_SIGNING_ALLOWED=NO`), gates on real compiler diagnostics, verifies the packaged `.app`
-  actually contains an executable, publishes a GitHub Release with `Nidget.ipa`, and updates
-  `apps.json`.
-- `apps.json` at the repo root is a Feather/AltStore-compatible source — add
-  `https://raw.githubusercontent.com/nphil/nidget/main/apps.json` as a source in Feather and
-  install/update Nidget from there.
-- Manual builds: Actions → *Build IPA* → *Run workflow* (works from any branch).
-
-Release builds ship with `VALIDATE_PRODUCT=NO` and
-`CADisableMinimumFrameDurationOnPhone` (uncapped 120Hz ProMotion) — both proven in Stashy.
+Release builds ship with `VALIDATE_PRODUCT=NO` and `CADisableMinimumFrameDurationOnPhone`
+(uncapped 120Hz ProMotion) — both proven in Stashy.
 
 ## First run
 
