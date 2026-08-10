@@ -495,7 +495,9 @@ Tailscale hint, connection test with animated states) → file pick + optional E
 
 ## 14. Screen specs (Features/*)
 
-**Budget** (`BudgetView`): month header with chevron nav + `ChipPicker` months; hero row: To Budget
+**Budget** (`BudgetView`): month controls in the navigation bar (chevron nav flanking a tappable
+month title that opens `MonthPickerSheet`, inline title mode, no "Budget" text title, so the List
+sits directly under the bar); hero row: To Budget
 amount (AmountText .display, green/red); grouped category rows: name, budgeted (tap → inline
 `BudgetAmountEditor` sheet w/ keypad), spent (tap → filtered transactions), balance pill (colorized,
 carryover indicator). Swipe actions: move money (opens `MoveMoneySheet`: from/to category pickers +
@@ -504,7 +506,8 @@ collapsed by default.
 
 **Transactions** (`TransactionsView`): searchable list (`.searchable`), grouped by day
 (SectionHeader with relative dates), rows: payee, category chip, notes line, AmountText, cleared
-dot (tap toggles w/ spring). Filter bar: account ChipPicker + uncategorized toggle. Swipe:
+dot (tap toggles w/ spring). Filters: a trailing-toolbar Menu (account Picker + uncategorized
+Toggle); deep-linked category/payee/month filters show a clearable chip above the List. Swipe:
 delete / edit / toggle cleared. Infinite scroll paging (100/page). Tap row → `TransactionDetailView`
 (editable form reusing QuickAdd pieces). Pull-to-refresh triggers `syncNow`.
 

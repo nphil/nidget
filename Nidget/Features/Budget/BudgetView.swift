@@ -3,8 +3,11 @@ import Foundation
 
 // MARK: - BudgetView
 //
-// The Budget tab root (ARCHITECTURE §14): a month header (chevron nav + a tappable month title
-// that opens MonthPickerSheet), a To Budget hero card, and grouped envelope rows. Everything reads
+// The Budget tab root (ARCHITECTURE §14): the month lives in the navigation bar (chevron nav
+// flanking a tappable month title that opens MonthPickerSheet), and the List is the whole screen
+// under it — a To Budget hero card and grouped envelope rows. Nothing sits between the bar and
+// the List, so rows scroll up under the bar and iOS 26's scroll edge effect fades them over the
+// themed backdrop, the same as Retire, Settings and Accounts. Everything reads
 // `store.monthSnapshot`/`store.categoryGroups` live — never a locally mirrored copy — so an
 // in-place edit (BudgetAmountEditor / MoveMoneySheet save) is reflected immediately and
 // correctly even though it doesn't change the selected month. The hero card's slide transition
@@ -45,57 +48,56 @@ struct BudgetView: View {
     // MARK: Screen
 
     private var screenContent: some View {
-        VStack(spacing: 0) {
-            monthHeader
-            content
-        }
-        .themedScreen()
-        .navigationTitle("Budget")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Haptics.tick()
-                    router.push(.manageCategories)
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .fontWeight(theme.icons.weight)
-                        .symbolVariant(theme.icons.fill ? .fill : .none)
+        content
+            .themedScreen()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    monthToolbarControls
                 }
-                .accessibilityLabel("Manage Categories")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Haptics.tick()
+                        router.push(.manageCategories)
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .fontWeight(theme.icons.weight)
+                            .symbolVariant(theme.icons.fill ? .fill : .none)
+                    }
+                    .accessibilityLabel("Manage Categories")
+                }
             }
-        }
-        .task(id: store.currentMonth) { await loadIncomeReceived() }
-        .sheet(item: $editingRow) { row in
-            BudgetAmountEditor(row: row, month: store.currentMonth)
-                .presentationDetents([.height(420)])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(item: $categoryEditor) { mode in
-            CategoryEditorSheet(mode: mode)
-        }
-        .sheet(item: $moveMoneyTarget) { target in
-            MoveMoneySheet(month: store.currentMonth, initialFromCategoryID: target.categoryID)
-                .presentationDetents([.height(480), .large])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(item: $categoryDeleteTarget) { category in
-            DeleteCategorySheet(category: category)
+            .task(id: store.currentMonth) { await loadIncomeReceived() }
+            .sheet(item: $editingRow) { row in
+                BudgetAmountEditor(row: row, month: store.currentMonth)
+                    .presentationDetents([.height(420)])
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $categoryEditor) { mode in
+                CategoryEditorSheet(mode: mode)
+            }
+            .sheet(item: $moveMoneyTarget) { target in
+                MoveMoneySheet(month: store.currentMonth, initialFromCategoryID: target.categoryID)
+                    .presentationDetents([.height(480), .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $categoryDeleteTarget) { category in
+                DeleteCategorySheet(category: category)
+                    .presentationDetents([.height(420), .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showingMonthPicker) {
+                MonthPickerSheet(currentMonth: store.currentMonth) { month in
+                    selectMonth(month)
+                }
+                // Header + year stepper + a 4-row month grid need ~390pt even in the default
+                // theme, and several catalog themes run wider spacing/cardPadding than that
+                // (up to spacing: 16 / cardPadding: 20) — a plain .height(360) clipped the bottom
+                // month row under those themes and at larger Dynamic Type sizes. .large lets a
+                // drag up cover whatever a fixed height doesn't.
                 .presentationDetents([.height(420), .large])
                 .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showingMonthPicker) {
-            MonthPickerSheet(currentMonth: store.currentMonth) { month in
-                selectMonth(month)
             }
-            // Header + year stepper + a 4-row month grid need ~390pt even in the default
-            // theme, and several catalog themes run wider spacing/cardPadding than that
-            // (up to spacing: 16 / cardPadding: 20) — a plain .height(360) clipped the bottom
-            // month row under those themes and at larger Dynamic Type sizes. .large lets a
-            // drag up cover whatever a fixed height doesn't.
-            .presentationDetents([.height(420), .large])
-            .presentationDragIndicator(.visible)
-        }
     }
 
     @ViewBuilder
@@ -123,20 +125,20 @@ struct BudgetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Month header
+    // MARK: Month controls (navigation bar)
+    //
+    // The month is this screen's title, so it lives in the bar's principal slot: chevron,
+    // tappable month, chevron, as one compact group. Keeping it here (rather than in a row above
+    // the List) is what lets the List start at the very top of the screen — content scrolls under
+    // the bar and fades there, and the large title no longer collapses into dead space. All of it
+    // redraws only when the month changes, never while scrolling.
 
-    private var monthHeader: some View {
-        VStack(spacing: theme.layout.spacing * 0.6) {
-            HStack {
-                navButton(systemImage: "chevron.left", label: "Previous month") { navigate(.backward) }
-                Spacer()
-                monthTitleButton
-                Spacer()
-                navButton(systemImage: "chevron.right", label: "Next month") { navigate(.forward) }
-            }
+    private var monthToolbarControls: some View {
+        HStack(spacing: 0) {
+            navButton(systemImage: "chevron.left", label: "Previous month") { navigate(.backward) }
+            monthTitleButton
+            navButton(systemImage: "chevron.right", label: "Next month") { navigate(.forward) }
         }
-        .padding(.horizontal, theme.layout.cardPadding)
-        .padding(.top, theme.layout.spacing * 0.5)
         .animation(reduceMotion ? nil : theme.motion.snappy, value: store.currentMonth)
     }
 
@@ -149,11 +151,13 @@ struct BudgetView: View {
                 Text(store.currentMonth.displayName)
                     .font(theme.font(.headline))
                     .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(theme.font(.caption))
                     .fontWeight(theme.icons.weight)
                     .foregroundStyle(theme.palette.textTertiary)
             }
+            .padding(.horizontal, 6)
             .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
@@ -163,10 +167,12 @@ struct BudgetView: View {
         .accessibilityLabel("\(store.currentMonth.displayName). Double tap to choose a month.")
     }
 
+    /// 44pt tap target, lighter glyph than the old header row so the three controls sit
+    /// comfortably in an inline navigation bar next to Manage.
     private func navButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(theme.font(.headline))
+                .font(theme.font(.subheadline))
                 .fontWeight(theme.icons.weight)
                 .symbolVariant(theme.icons.fill ? .fill : .none)
                 .foregroundStyle(theme.palette.textSecondary)

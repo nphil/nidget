@@ -135,7 +135,7 @@ struct GuideBudgetPage: View {
     var body: some View {
         GuidePage(
             title: "The Budget screen",
-            text: "Tap the budgeted amount to fill an envelope. Spent is what left this month, and the balance pill is what remains. A red balance just means that envelope ran dry. Swipe the row and move some money over from another one, no guilt required."
+            text: "The month you are looking at sits right at the top. Tap it to jump to another one, or use the little arrows beside it. Tap the budgeted amount to fill an envelope. Spent is what left this month, and the balance pill is what remains. A red balance just means that envelope ran dry. Swipe the row and move some money over from another one, no guilt required."
         ) {
             VStack(spacing: theme.layout.spacing * 0.5) {
                 mockRow

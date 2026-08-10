@@ -2,18 +2,17 @@ import SwiftUI
 
 // MARK: - TransactionsView
 //
-// The Transactions tab root (ARCHITECTURE §14): a searchable list grouped by day, a single
-// scrolling filter row (All + account chips + a separator dot + the Uncategorized toggle chip,
-// all in one ScrollView per UX_ROUND2 §4 — nothing pinned, nothing overlapping), 100-per-batch
+// The Transactions tab root (ARCHITECTURE §14): a searchable list grouped by day, 100-per-batch
 // infinite paging with a sentinel on the last row, pull-to-refresh through `syncNow`, and
 // leading/trailing swipe actions. Search binds into `TransactionQuery.search` after a 300ms
 // `.task(id:)` debounce; deep links land through `router.pendingTransactionFilter`. Cleared
 // toggles are optimistic with a per-id sequence token (LESSONS §2) so rapid taps and racing
 // reloads can't snap the dot back.
 //
-// The Uncategorized chip can scroll out of view in the unified row, so while it's active a small
-// warning-tinted reminder dot sits just leading of the scrollable chips, outside the ScrollView so
-// it never scrolls away with them; tapping it clears the filter.
+// Account and Uncategorized filters live in one toolbar menu, not in a row above the list: a long
+// account list scrolls inside a native menu instead of sideways off the screen, and with nothing
+// between the navigation bar and the List the rows scroll up under the bar and fade there, the
+// same as Budget, Retire and Settings. The menu icon fills and turns accent while any filter is on.
 
 struct TransactionsView: View {
     @Environment(AppStore.self) private var store
@@ -21,7 +20,6 @@ struct TransactionsView: View {
     @Environment(Preferences.self) private var preferences
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var chipNamespace
 
     // Filters
     @State private var searchText = ""
@@ -66,199 +64,115 @@ struct TransactionsView: View {
     // MARK: Screen
 
     private var screenContent: some View {
-        VStack(spacing: 0) {
-            filterBar
-            transactionList
-        }
-        .themedScreen()
-        .navigationTitle("Transactions")
-        .navigationBarTitleDisplayMode(.large)
-        .searchable(text: $searchText,
-                    placement: .navigationBarDrawer(displayMode: .automatic),
-                    prompt: "Payee or notes")
-        .task(id: searchText) { await debounceSearch() }
-        .task(id: router.pendingTransactionFilter != nil) { consumePendingFilter() }
-        .task(id: filterKey) {
-            let preserve = loadedFilterKey == filterKey
-            await reload(preservingDepth: preserve)
-        }
-        .task(id: semanticKey) { await refreshRelated() }
-        .onChange(of: router.quickAddPresented) { _, presented in
-            if !presented {
-                Task { await reload(preservingDepth: true) }
-            }
-        }
-        .onChange(of: router.transactionsPath.count) { oldCount, newCount in
-            if newCount < oldCount {
-                Task { await reload(preservingDepth: true) }
-            }
-        }
-        .confirmationDialog("Delete this transaction?",
-                            isPresented: $showDeleteConfirm,
-                            titleVisibility: .visible,
-                            presenting: pendingDelete) { transaction in
-            Button("Delete Transaction", role: .destructive) { performDelete(transaction) }
-            Button("Keep It", role: .cancel) { }
-        } message: { transaction in
-            Text(deleteMessage(for: transaction))
-        }
-    }
-
-    // MARK: Filter bar
-    //
-    // One ScrollView, one HStack: All + account chips, a thin separator dot, then the
-    // Uncategorized toggle chip — nothing pinned, nothing overlapping (UX_ROUND2 §4 fixes a
-    // screenshot bug where the toggle used to sit pinned outside the scrolling chips). Built by
-    // hand rather than reusing `ChipPicker` because that component owns its own ScrollView and
-    // a single T-typed selection — merging a second, independent toggle into its row would mean
-    // two scroll regions again, which is exactly the bug being fixed. The account/All chips
-    // below intentionally match ChipPicker's own visual language (capsule, accent fill selected,
-    // matchedGeometryEffect slide).
-    //
-    // `searchReminderDot` sits leading of the ScrollView, outside it, rather than as a
-    // screen-level overlay: an earlier version floated it at a fixed offset over the top-leading
-    // corner of the screen to stay visible after the Uncategorized chip scrolled away, but that
-    // offset was measured against the content area (below the system search field, not the
-    // filter row), so it landed on top of the "All" chip — a real, not just small-screen, overlap
-    // that also stole its taps. Laying the dot out in-flow, before the scrollable chips, keeps it
-    // permanently visible without depending on any fixed pixel offset.
-
-    private var filterBar: some View {
-        VStack(alignment: .leading, spacing: theme.layout.spacing * 0.5) {
-            unifiedFilterRow
-            if hasExternalFilter {
-                externalFilterChip
-            }
-        }
-        .padding(.horizontal, theme.layout.cardPadding)
-        .padding(.vertical, theme.layout.spacing * 0.5)
-    }
-
-    private var unifiedFilterRow: some View {
-        HStack(spacing: theme.layout.spacing * 0.5) {
-            searchReminderDot
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: theme.layout.spacing * 0.6) {
-                    accountChip(id: "", label: "All")
-                    ForEach(openAccounts) { account in
-                        accountChip(id: account.id, label: account.name)
-                    }
-                    filterSeparatorDot
-                    uncategorizedChip
+        listWithDeepLinkFilter
+            .themedScreen()
+            .navigationTitle("Transactions")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    filterMenu
                 }
-                .padding(.vertical, 2)
             }
+            .searchable(text: $searchText,
+                        placement: .navigationBarDrawer(displayMode: .automatic),
+                        prompt: "Payee or notes")
+            .task(id: searchText) { await debounceSearch() }
+            .task(id: router.pendingTransactionFilter != nil) { consumePendingFilter() }
+            .task(id: filterKey) {
+                let preserve = loadedFilterKey == filterKey
+                await reload(preservingDepth: preserve)
+            }
+            .task(id: semanticKey) { await refreshRelated() }
+            .onChange(of: router.quickAddPresented) { _, presented in
+                if !presented {
+                    Task { await reload(preservingDepth: true) }
+                }
+            }
+            .onChange(of: router.transactionsPath.count) { oldCount, newCount in
+                if newCount < oldCount {
+                    Task { await reload(preservingDepth: true) }
+                }
+            }
+            .confirmationDialog("Delete this transaction?",
+                                isPresented: $showDeleteConfirm,
+                                titleVisibility: .visible,
+                                presenting: pendingDelete) { transaction in
+                Button("Delete Transaction", role: .destructive) { performDelete(transaction) }
+                Button("Keep It", role: .cancel) { }
+            } message: { transaction in
+                Text(deleteMessage(for: transaction))
+            }
+    }
+
+    // MARK: Filters
+    //
+    // Account and Uncategorized used to be a horizontal row of chips above the List (UX_ROUND2
+    // §4). Two things were wrong with that: the account chips grew into a long sideways list that
+    // hid most accounts off-screen, and the row itself sat between the navigation bar and the
+    // List, so nothing ever scrolled under the bar and the screen never got the scroll edge fade.
+    // Both filters now live in one toolbar menu. Menu rows are native and built lazily, so any
+    // number of accounts is fine, they read top to bottom like every other iOS filter, and the
+    // List is free to be the whole screen.
+    //
+    // The menu writes exactly the state the chips wrote, so `filterKey` and the `.task(id:)`
+    // reload path are untouched.
+
+    private var filterMenu: some View {
+        Menu {
+            Picker("Account", selection: accountFilterBinding) {
+                Text("All Accounts").tag("")
+                ForEach(openAccounts) { account in
+                    Text(account.name).tag(account.id)
+                }
+            }
+            .pickerStyle(.inline)
+            Toggle(isOn: uncategorizedOnlyBinding) {
+                Label("Uncategorized only", systemImage: "questionmark.circle")
+            }
+            .tint(theme.palette.warning)
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(hasActiveFilter ? .fill : (theme.icons.fill ? .fill : .none))
+                .foregroundStyle(hasActiveFilter ? theme.palette.accent : theme.palette.textSecondary)
         }
-        .animation(reduceMotion ? nil : theme.motion.snappy, value: uncategorizedOnly)
+        .accessibilityLabel(filterMenuLabel)
+    }
+
+    private var filterMenuLabel: String {
+        hasActiveFilter ? "Filters, on" : "Filters"
     }
 
     private var openAccounts: [Account] {
         store.accounts.filter { !$0.closed }
     }
 
-    private func accountChip(id: String, label: String) -> some View {
-        let isSelected = accountFilter == id
-        return Button {
-            guard !isSelected else { return }
-            Haptics.tick()
-            if reduceMotion {
-                accountFilter = id
-            } else {
-                withAnimation(theme.motion.snappy) { accountFilter = id }
-            }
-        } label: {
-            Text(label)
-                .font(theme.font(.subheadline))
-                .fontWeight(isSelected ? .semibold : .regular)
-                .lineLimit(1)
-                .foregroundStyle(isSelected ? theme.palette.onAccent : theme.palette.textSecondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background {
-                    if isSelected {
-                        Capsule()
-                            .fill(theme.palette.accent)
-                            .matchedGeometryEffect(id: "accountChip.selection", in: chipNamespace)
-                    } else {
-                        Capsule()
-                            .fill(theme.palette.fill)
-                    }
-                }
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    /// True when anything the menu or the deep-link chip represents is narrowing the list. Drives
+    /// the toolbar icon's filled/accent state; search has its own visible field, so it stays out.
+    private var hasActiveFilter: Bool {
+        !accountFilter.isEmpty || uncategorizedOnly || hasExternalFilter
     }
 
-    private var filterSeparatorDot: some View {
-        Circle()
-            .fill(theme.palette.separator)
-            .frame(width: 4, height: 4)
+    private var accountFilterBinding: Binding<String> {
+        Binding(get: { accountFilter },
+                set: { newValue in
+                    guard newValue != accountFilter else { return }
+                    Haptics.tick()
+                    accountFilter = newValue
+                })
     }
 
-    private var uncategorizedChip: some View {
-        Button {
-            Haptics.tick()
-            if reduceMotion {
-                uncategorizedOnly.toggle()
-            } else {
-                withAnimation(theme.motion.snappy) { uncategorizedOnly.toggle() }
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "questionmark.circle")
-                    .font(theme.font(.caption))
-                    .fontWeight(theme.icons.weight)
-                    .symbolVariant(theme.icons.fill ? .fill : .none)
-                Text("Uncategorized")
-            }
-            .font(theme.font(.subheadline))
-            .fontWeight(uncategorizedOnly ? .semibold : .regular)
-            .foregroundStyle(uncategorizedOnly ? theme.palette.warning : theme.palette.textSecondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background {
-                Capsule()
-                    .fill(uncategorizedOnly ? theme.palette.warning.opacity(0.18) : theme.palette.fill)
-                    .overlay {
-                        if uncategorizedOnly {
-                            Capsule().strokeBorder(theme.palette.warning, lineWidth: 1)
-                        }
-                    }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Filter uncategorized")
-        .accessibilityAddTraits(uncategorizedOnly ? [.isSelected] : [])
+    private var uncategorizedOnlyBinding: Binding<Bool> {
+        Binding(get: { uncategorizedOnly },
+                set: { newValue in
+                    guard newValue != uncategorizedOnly else { return }
+                    Haptics.tick()
+                    uncategorizedOnly = newValue
+                })
     }
 
-    /// Reminder that the Uncategorized filter is on, shown even after the chip itself has
-    /// scrolled out of the unified row. Tapping it clears the filter directly.
-    @ViewBuilder
-    private var searchReminderDot: some View {
-        if uncategorizedOnly {
-            Button {
-                Haptics.tick()
-                if reduceMotion {
-                    uncategorizedOnly = false
-                } else {
-                    withAnimation(theme.motion.snappy) { uncategorizedOnly = false }
-                }
-            } label: {
-                Circle()
-                    .fill(theme.palette.warning)
-                    .frame(width: 9, height: 9)
-                    .padding(9)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .transition(.scale.combined(with: .opacity))
-            .accessibilityLabel("Uncategorized filter is on")
-            .accessibilityHint("Double tap to clear it")
-        }
-    }
-
+    /// A deep link (Budget "spent" tap, a payee, a month) can filter by things the menu has no
+    /// control for. Only then does the clearable chip appear.
     private var hasExternalFilter: Bool {
         categoryFilter != nil || payeeFilter != nil || monthsFilter != nil
     }
@@ -321,6 +235,29 @@ struct TransactionsView: View {
     }
 
     // MARK: List
+
+    /// The List is the screen. The deep-link chip is the one thing that can still sit above it,
+    /// and only while such a filter is on — the branch, rather than an always-present container,
+    /// keeps the plain case a bare List hanging straight off the navigation bar. Switching
+    /// branches costs nothing: arriving at or clearing a deep-link filter reloads the run anyway.
+    @ViewBuilder
+    private var listWithDeepLinkFilter: some View {
+        if hasExternalFilter {
+            VStack(spacing: 0) {
+                externalFilterBar
+                transactionList
+            }
+        } else {
+            transactionList
+        }
+    }
+
+    private var externalFilterBar: some View {
+        externalFilterChip
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, theme.layout.cardPadding)
+            .padding(.vertical, theme.layout.spacing * 0.5)
+    }
 
     private var transactionList: some View {
         List {

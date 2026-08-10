@@ -90,6 +90,11 @@ selected month accent-filled, future months beyond next month dimmed but selecta
 with no data still selectable. Selecting closes + navigates with the existing spring
 animation. File: MonthPickerSheet.swift in Features/Budget/, reusable by Reports later.
 
+Superseded 2026-08-10: the header row is gone. The same chevrons and tappable month title (and
+MonthPickerSheet itself, unchanged) now live in the navigation bar's principal slot with
+`.navigationBarTitleDisplayMode(.inline)` and no "Budget" title, so the List is the whole screen
+and scrolls under the bar.
+
 ## 4. Transactions filter bar redesign (screenshot bug)
 
 Today an account ChipPicker scrolls while the Uncategorized toggle chip sits pinned to the
@@ -99,6 +104,12 @@ thin separator dot, then [Uncategorized] as a toggle chip (question-mark icon, w
 when active). Nothing pinned, nothing overlapping. Uncategorized active state must remain
 discoverable when scrolled away: when it is ON, show a small warning-tinted dot on the
 leading edge of the search field as a reminder (tap clears the filter).
+
+Superseded 2026-08-10: the whole chip row (and its reminder dot) is gone. Account and
+Uncategorized are now one `line.3.horizontal.decrease.circle` Menu in the trailing toolbar (an
+inline Picker of All Accounts + open accounts, plus an "Uncategorized only" Toggle), which fixes
+the too-long account list as well and leaves the List sitting directly under the navigation bar.
+Only deep-linked category/payee/month filters still show a clearable chip above the List.
 
 ## 5. Dashboard interaction fixes
 
