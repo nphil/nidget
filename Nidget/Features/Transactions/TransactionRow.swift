@@ -99,14 +99,17 @@ struct TransactionRow: View {
             Button {
                 onToggleCleared?()
             } label: {
+                // A checkmark, not a filled dot: a dot inside a circle reads as a radio button
+                // (row selection), while a check reads as "confirmed" — and it matches the
+                // Cleared/Uncleared chips on the account screen.
                 ZStack {
                     Circle()
                         .strokeBorder(transaction.cleared ? theme.palette.accent : theme.palette.textTertiary,
                                       lineWidth: 1.5)
                         .frame(width: 18, height: 18)
-                    Circle()
-                        .fill(theme.palette.accent)
-                        .frame(width: 10, height: 10)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(theme.palette.accent)
                         .scaleEffect(transaction.cleared ? 1.0 : 0.01)
                         .opacity(transaction.cleared ? 1.0 : 0.0)
                 }

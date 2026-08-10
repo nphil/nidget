@@ -504,14 +504,15 @@ private struct AccountTransactionRow: View {
                 .accessibilityLabel("Reconciled")
         } else {
             Button(action: onToggleCleared) {
+                // Checkmark rather than a filled dot — see the note in TransactionRow.
                 ZStack {
                     Circle()
                         .strokeBorder(transaction.cleared ? theme.palette.accent : theme.palette.textTertiary,
                                       lineWidth: 1.5)
                         .frame(width: 18, height: 18)
-                    Circle()
-                        .fill(theme.palette.accent)
-                        .frame(width: 10, height: 10)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(theme.palette.accent)
                         .scaleEffect(transaction.cleared ? 1.0 : 0.01)
                         .opacity(transaction.cleared ? 1.0 : 0.0)
                 }
