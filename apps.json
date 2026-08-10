@@ -1,7 +1,7 @@
 {
   "name": "Nidget Repo",
   "subtitle": "Repository for the Nidget iOS app",
-  "description": "An unofficial AltStore/Feather compatible source for Nidget — a beautiful, offline-first iOS companion for your self-hosted Actual Budget server, with SimpleFIN import and retirement planning.",
+  "description": "An unofficial AltStore/Feather compatible source for Nidget \u2014 a beautiful, offline-first iOS companion for your self-hosted Actual Budget server, with SimpleFIN import and retirement planning.",
   "iconURL": "https://raw.githubusercontent.com/nphil/nidget/main/Nidget/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
   "website": "https://github.com/nphil/nidget",
   "tintColor": "#6DC4E0",
@@ -18,7 +18,16 @@
       "deviceFamilies": [
         1
       ],
-      "versions": []
+      "versions": [
+        {
+          "version": "1.0.1",
+          "buildVersion": "1.0.1",
+          "date": "2026-08-10T01:59:39Z",
+          "localizedDescription": "Unsigned IPA \u2014 sideload with Feather/AltStore. Built from `0e3c9f5` on 2026-08-10 01:59 UTC",
+          "downloadURL": "https://github.com/nphil/nidget/releases/download/v1.0.1/Nidget.ipa",
+          "size": 2622291
+        }
+      ]
     }
   ]
 }
