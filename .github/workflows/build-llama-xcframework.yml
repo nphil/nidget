@@ -1,0 +1,58 @@
+name: Build llama.xcframework
+
+# Manually-triggered. Builds a slim iOS-device llama.xcframework from llama.cpp pinned in
+# scripts/build-llama-xcframework.sh and publishes it as a PRERELEASE asset tagged
+# llama-<pin7>. ios-build.yml downloads that asset instead of the repo carrying an LFS
+# binary (Nidget improvement over the HomeBoy original). Re-run only when the pin bumps.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-llama-xcframework
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and publish llama.xcframework
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          # Pinned family to match ios-build.yml — the app links this framework, so building
+          # it with a different toolchain than the app is a subtle failure mode.
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+            echo "::warning::No Xcode 26.x on this runner; falling back to $XCODE"
+          fi
+          echo "Using: $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Ensure CMake
+        run: cmake --version || brew install cmake
+
+      - name: Build llama.xcframework (iOS device, arm64)
+        run: bash scripts/build-llama-xcframework.sh
+
+      - name: Publish as prerelease asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PIN=$(grep -m1 'LLAMA_PIN=' scripts/build-llama-xcframework.sh | cut -d'"' -f2)
+          TAG="llama-${PIN:0:7}"
+          echo "Publishing build/llama.xcframework.zip as $TAG"
+          # Recreate cleanly if the tag already exists (idempotent re-runs).
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" \
+            build/llama.xcframework.zip \
+            --prerelease \
+            --title "llama.xcframework (${PIN:0:7})" \
+            --notes "Prebuilt iOS-device llama.xcframework from ggml-org/llama.cpp@${PIN}. Consumed by ios-build.yml and scripts/fetch-llama-xcframework.sh — not an app release."
