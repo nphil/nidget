@@ -23,6 +23,9 @@ enum Route: Hashable {
     case simpleFINSetup
     case securitySettings
     case retirementAssumptions
+    case manageCategories
+    case intelligence
+    case aiBenchmark
 }
 
 // MARK: - AppRouter
@@ -99,6 +102,12 @@ private struct RouteDestinationsModifier: ViewModifier {
                 SecuritySettingsView()
             case .retirementAssumptions:
                 AssumptionsSheet()
+            case .manageCategories:
+                ManageCategoriesView()
+            case .intelligence:
+                IntelligenceView()
+            case .aiBenchmark:
+                AIBenchmarkView()
             }
         }
     }
