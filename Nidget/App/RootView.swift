@@ -107,6 +107,14 @@ private struct RootContentView: View {
             QuickAddView()
                 .presentationDetents([.height(560), .large])
         }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            // OpenQuickAddIntent (Platform/AppShortcuts.swift) opens the app and requests the
+            // Quick Add sheet via PendingActions; the sheet must be presented from the app frame.
+            if phase == .active, PendingActions.quickAddRequested {
+                PendingActions.quickAddRequested = false
+                router.quickAddPresented = true
+            }
+        }
     }
 
     // MARK: Quick Add floating button
