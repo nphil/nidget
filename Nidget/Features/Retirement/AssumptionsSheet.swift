@@ -6,6 +6,9 @@ import SwiftUI
 // the `AssumptionsSheet()` initializer is binding). Themed cards rather than a plain Form:
 // age steppers, keypad-backed money rows, rate sliders with 0.1-precision labels, and a
 // linked-accounts multi-select (off-budget accounts first — that's where investments live).
+// Under the contribution row, a detected value from real transfers into the linked accounts
+// (`ContributionDetector`, averaged over 6 months) offers itself with a Use button; the manual
+// keypad override always stays available.
 //
 // Editing happens on a local copy seeded from `Preferences.retirementConfigJSON` at init;
 // nothing persists until Save (which sanitizes age ordering, encodes deterministically, and
@@ -24,6 +27,8 @@ struct AssumptionsSheet: View {
     @State private var rememberedOverride: Money?
     /// Last-12-months outflow, loaded async for the derive-toggle caption and override seed.
     @State private var derivedAnnualSpending: Money?
+    /// Monthly contribution detected from transfers into the linked accounts; nil = none found.
+    @State private var detectedContribution: Money?
     @State private var editingField: MoneyField?
 
     init() {
@@ -95,6 +100,9 @@ struct AssumptionsSheet: View {
         .task {
             await loadDerivedSpending()
         }
+        .task(id: config.linkedAccountIDs) {
+            await loadDetectedContribution()
+        }
         .sheet(item: $editingField) { field in
             MoneyEntrySheet(title: field.title,
                             caption: field.caption,
@@ -159,6 +167,9 @@ struct AssumptionsSheet: View {
             moneyRow(field: .extraAssets, value: config.extraAssets)
             divider
             moneyRow(field: .monthlyContribution, value: config.monthlyContribution)
+            if let detectedContribution {
+                detectedContributionRow(detectedContribution)
+            }
             divider
             deriveToggleRow
             if let override = config.annualSpendingOverride {
@@ -199,6 +210,51 @@ struct AssumptionsSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens the amount keypad")
+    }
+
+    /// Contribution detected from real transfers into the linked accounts, with a Use button.
+    /// The keypad row above stays the manual override; this just saves the typing.
+    private func detectedContributionRow(_ detected: Money) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Detected from your transfers")
+                    .font(theme.font(.body))
+                    .foregroundStyle(theme.palette.textPrimary)
+                HStack(spacing: 4) {
+                    Text("About")
+                        .font(theme.font(.caption))
+                        .foregroundStyle(theme.palette.textTertiary)
+                    AmountText(detected, style: .caption, colorized: false)
+                    Text("a month over the last 6 months.")
+                        .font(theme.font(.caption))
+                        .foregroundStyle(theme.palette.textTertiary)
+                }
+            }
+            Spacer(minLength: theme.layout.spacing)
+            if config.monthlyContribution == detected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(theme.font(.title))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(theme.palette.accent)
+                    .accessibilityLabel("Already in use")
+            } else {
+                Button {
+                    Haptics.tick()
+                    withAnimation(reduceMotion ? nil : theme.motion.snappy) {
+                        config.monthlyContribution = detected
+                    }
+                } label: {
+                    Text("Use")
+                        .font(theme.font(.headline))
+                        .foregroundStyle(theme.palette.accent)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Use the detected contribution")
+            }
+        }
+        .frame(minHeight: 44)
     }
 
     private var deriveToggleRow: some View {
@@ -327,7 +383,7 @@ struct AssumptionsSheet: View {
                 Text("No accounts to link")
                     .font(theme.font(.headline))
                     .foregroundStyle(theme.palette.textPrimary)
-                Text("Accounts from your Actual budget will show up here — off-budget investment accounts work best.")
+                Text("Accounts from your Actual budget will show up here. Off-budget investment accounts work best.")
                     .font(theme.font(.caption))
                     .foregroundStyle(theme.palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -408,6 +464,13 @@ struct AssumptionsSheet: View {
         let series = await store.monthlySpendSeries(monthsBack: 12)
         guard !Task.isCancelled else { return }
         derivedAnnualSpending = series.reduce(Money.zero) { $0 + $1.1.magnitude }
+    }
+
+    private func loadDetectedContribution() async {
+        let detected = await ContributionDetector.detectedMonthlyContribution(
+            store: store, linkedAccountIDs: config.linkedAccountIDs)
+        guard !Task.isCancelled else { return }
+        detectedContribution = detected
     }
 
     // MARK: Shared bits

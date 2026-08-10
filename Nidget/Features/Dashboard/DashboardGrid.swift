@@ -9,6 +9,17 @@ import UniformTypeIdentifiers
 // drag-to-reorder (onDrag + DropDelegate reordering live), and a dashed "+" tile while
 // capacity remains. Layout math is pure (computed per body pass, never written to @State on a
 // geometry path — LESSONS §1).
+//
+// Non-edit mode interaction (UX_ROUND2 §5): tiles route their tap-vs-swipe gating and their
+// long-press-to-edit gesture through `WidgetCardButton` (bottom of this file, shared by every
+// widget) rather than here, since that's the one place that already owns each widget's
+// navigation `action`. This grid only supplies the two things WidgetCardButton can't know on
+// its own — "enter edit mode" and "pulse the swiped-from edge" — via the small environment hooks
+// declared below, and separately catches swipes that land on the grid background (the gaps
+// between tiles, or empty rows) with its own drag gesture. The existing onDrag/onDrop
+// reorder-in-edit-mode machinery on `tile(_:staggerIndex:)` is untouched: once `model.isEditing`
+// flips true, `.allowsHitTesting(!model.isEditing)` below turns off WidgetCardButton's gestures
+// entirely, so the two interaction models never compete for the same touch.
 
 struct DashboardGrid: View {
     let model: DashboardModel
@@ -18,6 +29,11 @@ struct DashboardGrid: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var gridSpace
     @State private var draggingID: UUID?
+
+    // Swipe-feedback pulse (UX_ROUND2 §5): a radial accent glow from the swiped-from edge.
+    @State private var glowEdge: Edge = .leading
+    @State private var glowOpacity: Double = 0
+    @State private var glowToken = UUID()
 
     init(model: DashboardModel, onAddWidget: @escaping () -> Void) {
         self.model = model
@@ -32,6 +48,9 @@ struct DashboardGrid: View {
                 size: proxy.size,
                 spacing: theme.layout.cardSpacing)
             ZStack(alignment: .topLeading) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(backgroundSwipeGesture)
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
                     let frame = layout.frames[item.id] ?? .zero
                     tile(item, staggerIndex: index)
@@ -46,13 +65,79 @@ struct DashboardGrid: View {
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            .overlay {
+                if !reduceMotion {
+                    RadialGradient(colors: [theme.palette.accent.opacity(glowOpacity),
+                                            theme.palette.accent.opacity(0)],
+                                  center: glowEdge.unitPoint,
+                                  startRadius: 0,
+                                  endRadius: max(proxy.size.width, proxy.size.height) * 0.7)
+                        .allowsHitTesting(false)
+                }
+            }
             .animation(reduceMotion ? nil : theme.motion.spring, value: model.items)
             .animation(reduceMotion ? nil : theme.motion.spring, value: model.isEditing)
+            .environment(\.dashboardEnterEdit, enterEditMode)
+            .environment(\.dashboardSwipeGlow, { translation in triggerSwipeGlow(translation) })
         }
         .onDrop(of: [.text], delegate: DashboardClearDropDelegate(draggingID: $draggingID))
         .onChange(of: model.isEditing) { _, editing in
             if !editing { draggingID = nil }
         }
+    }
+
+    // MARK: Non-edit-mode interaction
+
+    /// Catches swipes that land on the grid background — the gaps between tiles and any empty
+    /// rows — rather than on a tile itself. Tiles handle their own qualifying swipes through
+    /// `dashboardSwipeGlow` (WidgetCardButton), so this only needs the "falls on nothing" case.
+    private var backgroundSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onEnded { value in
+                guard !model.isEditing else { return }
+                let translation = value.translation
+                guard magnitude(of: translation) > 30 else { return }
+                triggerSwipeGlow(translation)
+            }
+    }
+
+    private func enterEditMode() {
+        guard !model.isEditing else { return }
+        withAnimation(reduceMotion ? nil : theme.motion.spring) {
+            model.isEditing = true
+        }
+    }
+
+    /// Pulses a themed radial glow from the edge the swipe came from, communicating that the
+    /// dashboard doesn't scroll (UX_ROUND2 §5). Skipped entirely under Reduce Motion.
+    private func triggerSwipeGlow(_ translation: CGSize) {
+        guard !reduceMotion else { return }
+        Haptics.tick()
+        glowEdge = dominantEdge(for: translation)
+        let token = UUID()
+        glowToken = token
+        withAnimation(theme.motion.spring) {
+            glowOpacity = 0.35
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(260))
+            guard glowToken == token else { return }
+            withAnimation(theme.motion.spring) {
+                glowOpacity = 0
+            }
+        }
+    }
+
+    private func dominantEdge(for translation: CGSize) -> Edge {
+        if abs(translation.width) >= abs(translation.height) {
+            return translation.width > 0 ? .leading : .trailing
+        } else {
+            return translation.height > 0 ? .top : .bottom
+        }
+    }
+
+    private func magnitude(of translation: CGSize) -> CGFloat {
+        (translation.width * translation.width + translation.height * translation.height).squareRoot()
     }
 
     // MARK: Tile
@@ -402,8 +487,55 @@ struct WidgetLabel: View {
     }
 }
 
+// MARK: - Dashboard interaction environment hooks
+//
+// WidgetCardButton (below) needs two things it doesn't own: a way to enter edit mode on a long
+// press, and a way to report a qualifying swipe so DashboardGrid can pulse its edge glow. Every
+// widget file keeps calling `WidgetCardButton(action:) { … }` exactly as before — DashboardGrid
+// injects the real closures on the grid; anywhere else (there is nowhere else today) they're
+// harmlessly nil and WidgetCardButton just does nothing extra.
+
+private struct DashboardEnterEditKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+private struct DashboardSwipeGlowKey: EnvironmentKey {
+    static let defaultValue: ((CGSize) -> Void)? = nil
+}
+private extension EnvironmentValues {
+    var dashboardEnterEdit: (() -> Void)? {
+        get { self[DashboardEnterEditKey.self] }
+        set { self[DashboardEnterEditKey.self] = newValue }
+    }
+    var dashboardSwipeGlow: ((CGSize) -> Void)? {
+        get { self[DashboardSwipeGlowKey.self] }
+        set { self[DashboardSwipeGlowKey.self] = newValue }
+    }
+}
+
+private extension Edge {
+    /// Where a radial glow should be centered to read as emanating from this edge.
+    var unitPoint: UnitPoint {
+        switch self {
+        case .leading: return .leading
+        case .trailing: return .trailing
+        case .top: return .top
+        case .bottom: return .bottom
+        }
+    }
+}
+
 /// A whole-card tap target with the theme's card treatment and pressed-state feedback.
 /// Content expands to fill the tile so the card always matches its grid frame.
+///
+/// Non-edit-mode interaction (UX_ROUND2 §5) lives here rather than in DashboardGrid because this
+/// is the one place that already owns each widget's navigation `action`. A plain `Button` would
+/// fire on release-within-bounds no matter how far the finger travelled first, so this replaces
+/// that with a `DragGesture(minimumDistance: 0)`: navigation only fires for a quick, nearly-still
+/// touch (< 10pt movement, < 0.4s), the press-down scale only appears after an ~80ms hold (so a
+/// fast swipe never flashes the tile), and a clear swipe (> 30pt) is reported upward instead of
+/// activating the tile. A `.onLongPressGesture` runs alongside it (`.simultaneousGesture` keeps
+/// the two from blocking each other) to enter edit mode. Once edit mode is on, DashboardGrid
+/// disables hit testing on this view entirely, so none of this can fire during a drag-to-reorder.
 struct WidgetCardButton<Content: View>: View {
     private let alignment: Alignment
     private let action: () -> Void
@@ -411,6 +543,12 @@ struct WidgetCardButton<Content: View>: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dashboardEnterEdit) private var enterEdit
+    @Environment(\.dashboardSwipeGlow) private var reportSwipe
+
+    @State private var isPressed = false
+    @State private var pressStart: Date?
+    @State private var pressToken = UUID()
 
     init(alignment: Alignment = .topLeading,
          action: @escaping () -> Void,
@@ -421,12 +559,56 @@ struct WidgetCardButton<Content: View>: View {
     }
 
     var body: some View {
-        Button(action: action) {
-            content()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
-                .themedCard()
-                .contentShape(theme.cardShape)
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+            .themedCard()
+            .contentShape(theme.cardShape)
+            .scaleEffect(isPressed ? 0.97 : 1)
+            .animation(reduceMotion ? nil : theme.motion.snappy, value: isPressed)
+            .simultaneousGesture(tapSwipeGesture)
+            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 10) {
+                Haptics.tap()
+                enterEdit?()
+            }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
+    }
+
+    // MARK: Tap vs swipe
+
+    private var tapSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                guard pressStart == nil else { return }
+                pressStart = Date()
+                schedulePressVisual()
+            }
+            .onEnded { value in
+                let duration = pressStart.map { Date().timeIntervalSince($0) } ?? 0
+                pressStart = nil
+                isPressed = false
+                let translation = value.translation
+                let magnitude = (translation.width * translation.width
+                                  + translation.height * translation.height).squareRoot()
+                if magnitude < 10, duration < 0.4 {
+                    Haptics.tap()
+                    action()
+                } else if magnitude > 30 {
+                    reportSwipe?(translation)
+                }
+            }
+    }
+
+    /// Delays the press-down scale by ~80ms so a fast swipe passes straight through without a
+    /// flash; guarded by a fresh token each press so a swipe that ends before the delay elapses
+    /// (`pressStart` already back to nil) can't have the visual land late.
+    private func schedulePressVisual() {
+        let token = UUID()
+        pressToken = token
+        Task {
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled, pressToken == token, pressStart != nil else { return }
+            isPressed = true
         }
-        .buttonStyle(PressableButtonStyle(pressAnimation: reduceMotion ? nil : theme.motion.snappy))
     }
 }

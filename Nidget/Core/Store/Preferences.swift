@@ -19,6 +19,7 @@ final class Preferences {
         static let currencyCode = "nidget.pref.currencyCode"
         static let biometricLock = "nidget.pref.biometricLock"
         static let privacyModeDefault = "nidget.pref.privacyModeDefault"
+        static let hasSeenGuide = "nidget.pref.hasSeenGuide"
         static let retirementConfigJSON = "nidget.pref.retirementConfigJSON"
         static let defaultAccountID = "nidget.pref.defaultAccountID"
         static let simplefinAccountMapJSON = "nidget.pref.simplefinAccountMapJSON"
@@ -53,6 +54,11 @@ final class Preferences {
     /// Start each launch with amounts blurred (`AppStore.privacyMode`'s initial value).
     var privacyModeDefault: Bool {
         didSet { UserDefaults.standard.set(privacyModeDefault, forKey: Key.privacyModeDefault) }
+    }
+
+    /// The onboarding Guide has been seen (or skipped) once; RootView stops auto-presenting it.
+    var hasSeenGuide: Bool {
+        didSet { UserDefaults.standard.set(hasSeenGuide, forKey: Key.hasSeenGuide) }
     }
 
     /// Serialized `RetirementConfig` (Core/Retirement). Empty string = defaults.
@@ -135,6 +141,7 @@ final class Preferences {
             ?? Locale.current.currency?.identifier ?? "USD"
         biometricLock = defaults.bool(forKey: Key.biometricLock)
         privacyModeDefault = defaults.bool(forKey: Key.privacyModeDefault)
+        hasSeenGuide = defaults.bool(forKey: Key.hasSeenGuide)
         retirementConfigJSON = defaults.string(forKey: Key.retirementConfigJSON) ?? ""
         defaultAccountID = defaults.string(forKey: Key.defaultAccountID)
         simplefinAccountMapJSON = defaults.string(forKey: Key.simplefinAccountMapJSON) ?? "{}"

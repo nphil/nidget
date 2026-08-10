@@ -3,8 +3,8 @@ import Foundation
 
 // MARK: - BudgetView
 //
-// The Budget tab root (ARCHITECTURE §14): a month header (chevron nav + a ChipPicker of the
-// last 12 months + next 1), a To Budget hero card, and grouped envelope rows. Everything reads
+// The Budget tab root (ARCHITECTURE §14): a month header (chevron nav + a tappable month title
+// that opens MonthPickerSheet), a To Budget hero card, and grouped envelope rows. Everything reads
 // `store.monthSnapshot`/`store.categoryGroups` live — never a locally mirrored copy — so an
 // in-place edit (BudgetAmountEditor / MoveMoneySheet save) is reflected immediately and
 // correctly even though it doesn't change the selected month. The hero card's slide transition
@@ -25,6 +25,7 @@ struct BudgetView: View {
     @State private var incomeExpanded = false
     @State private var incomeReceivedByCategory: [String: Money] = [:]
     @State private var navDirection: MonthNavDirection = .forward
+    @State private var showingMonthPicker = false
 
     @State private var editingRow: BudgetRowSnapshot?
     @State private var moveMoneyTarget: MoveMoneyTarget?
@@ -83,6 +84,13 @@ struct BudgetView: View {
                 .presentationDetents([.height(420), .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showingMonthPicker) {
+            MonthPickerSheet(currentMonth: store.currentMonth) { month in
+                selectMonth(month)
+            }
+            .presentationDetents([.height(360)])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     @ViewBuilder
@@ -117,19 +125,37 @@ struct BudgetView: View {
             HStack {
                 navButton(systemImage: "chevron.left", label: "Previous month") { navigate(.backward) }
                 Spacer()
-                Text(store.currentMonth.displayName)
-                    .font(theme.font(.headline))
-                    .foregroundStyle(theme.palette.textPrimary)
-                    .id(store.currentMonth)
-                    .transition(.opacity)
+                monthTitleButton
                 Spacer()
                 navButton(systemImage: "chevron.right", label: "Next month") { navigate(.forward) }
             }
-            ChipPicker(items: monthItems, selection: monthBinding, label: { $0.compactName })
         }
         .padding(.horizontal, theme.layout.cardPadding)
         .padding(.top, theme.layout.spacing * 0.5)
         .animation(reduceMotion ? nil : theme.motion.snappy, value: store.currentMonth)
+    }
+
+    private var monthTitleButton: some View {
+        Button {
+            Haptics.tick()
+            showingMonthPicker = true
+        } label: {
+            HStack(spacing: 4) {
+                Text(store.currentMonth.displayName)
+                    .font(theme.font(.headline))
+                    .foregroundStyle(theme.palette.textPrimary)
+                Image(systemName: "chevron.down")
+                    .font(theme.font(.caption))
+                    .fontWeight(theme.icons.weight)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .id(store.currentMonth)
+        .transition(.opacity)
+        .accessibilityLabel("\(store.currentMonth.displayName). Double tap to choose a month.")
     }
 
     private func navButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
@@ -146,14 +172,6 @@ struct BudgetView: View {
         .accessibilityLabel(label)
     }
 
-    private var monthBinding: Binding<BudgetMonth> {
-        Binding(get: { store.currentMonth }, set: { store.currentMonth = $0 })
-    }
-
-    private var monthItems: [BudgetMonth] {
-        BudgetMonth.lastMonths(13, endingAt: BudgetMonth.current.advanced(by: 1))
-    }
-
     private enum MonthNavDirection { case forward, backward }
 
     private func navigate(_ direction: MonthNavDirection) {
@@ -165,6 +183,20 @@ struct BudgetView: View {
         } else {
             withAnimation(theme.motion.spring) {
                 store.currentMonth = newMonth
+            }
+        }
+    }
+
+    /// MonthPickerSheet reports an arbitrary target month (any year jump, not just next/previous),
+    /// so this mirrors `navigate(_:)`'s animation but derives direction from a plain comparison.
+    private func selectMonth(_ month: BudgetMonth) {
+        guard month != store.currentMonth else { return }
+        navDirection = month > store.currentMonth ? .forward : .backward
+        if reduceMotion {
+            store.currentMonth = month
+        } else {
+            withAnimation(theme.motion.spring) {
+                store.currentMonth = month
             }
         }
     }

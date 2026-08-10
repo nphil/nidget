@@ -2,12 +2,20 @@ import SwiftUI
 
 // MARK: - TransactionsView
 //
-// The Transactions tab root (ARCHITECTURE §14): a searchable list grouped by day, an account
-// ChipPicker + uncategorized filter chip, 100-per-batch infinite paging with a sentinel on the
-// last row, pull-to-refresh through `syncNow`, and leading/trailing swipe actions. Search binds
-// into `TransactionQuery.search` after a 300ms `.task(id:)` debounce; deep links land through
-// `router.pendingTransactionFilter`. Cleared toggles are optimistic with a per-id sequence
-// token (LESSONS §2) so rapid taps and racing reloads can't snap the dot back.
+// The Transactions tab root (ARCHITECTURE §14): a searchable list grouped by day, a single
+// scrolling filter row (All + account chips + a separator dot + the Uncategorized toggle chip,
+// all in one ScrollView per UX_ROUND2 §4 — nothing pinned, nothing overlapping), 100-per-batch
+// infinite paging with a sentinel on the last row, pull-to-refresh through `syncNow`, and
+// leading/trailing swipe actions. Search binds into `TransactionQuery.search` after a 300ms
+// `.task(id:)` debounce; deep links land through `router.pendingTransactionFilter`. Cleared
+// toggles are optimistic with a per-id sequence token (LESSONS §2) so rapid taps and racing
+// reloads can't snap the dot back.
+//
+// The Uncategorized chip can scroll out of view in the unified row, so while it's active a small
+// warning-tinted reminder dot sits at the top-leading edge of this screen, immediately under the
+// search field (SwiftUI's `.searchable` gives feature code no supported hook to decorate the
+// system search bar itself, so this is the closest equivalent that's reachable with public API);
+// tapping it clears the filter.
 
 struct TransactionsView: View {
     @Environment(AppStore.self) private var store
@@ -15,6 +23,7 @@ struct TransactionsView: View {
     @Environment(Preferences.self) private var preferences
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var chipNamespace
 
     // Filters
     @State private var searchText = ""
@@ -69,6 +78,12 @@ struct TransactionsView: View {
         .searchable(text: $searchText,
                     placement: .navigationBarDrawer(displayMode: .automatic),
                     prompt: "Payee or notes")
+        .overlay(alignment: .topLeading) {
+            searchReminderDot
+                .padding(.leading, theme.layout.cardPadding - 4)
+                .offset(y: -6)
+                .animation(reduceMotion ? nil : theme.motion.snappy, value: uncategorizedOnly)
+        }
         .task(id: searchText) { await debounceSearch() }
         .task(id: router.pendingTransactionFilter != nil) { consumePendingFilter() }
         .task(id: filterKey) {
@@ -98,15 +113,19 @@ struct TransactionsView: View {
     }
 
     // MARK: Filter bar
+    //
+    // One ScrollView, one HStack: All + account chips, a thin separator dot, then the
+    // Uncategorized toggle chip — nothing pinned, nothing overlapping (UX_ROUND2 §4 fixes a
+    // screenshot bug where the toggle used to sit pinned outside the scrolling chips). Built by
+    // hand rather than reusing `ChipPicker` because that component owns its own ScrollView and
+    // a single T-typed selection — merging a second, independent toggle into its row would mean
+    // two scroll regions again, which is exactly the bug being fixed. The account/All chips
+    // below intentionally match ChipPicker's own visual language (capsule, accent fill selected,
+    // matchedGeometryEffect slide).
 
     private var filterBar: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.5) {
-            HStack(spacing: theme.layout.spacing * 0.6) {
-                ChipPicker(items: accountChipItems,
-                           selection: $accountFilter,
-                           label: accountChipLabel)
-                uncategorizedChip
-            }
+            unifiedFilterRow
             if hasExternalFilter {
                 externalFilterChip
             }
@@ -115,13 +134,62 @@ struct TransactionsView: View {
         .padding(.vertical, theme.layout.spacing * 0.5)
     }
 
-    private var accountChipItems: [String] {
-        [""] + store.accounts.filter { !$0.closed }.map(\.id)
+    private var unifiedFilterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: theme.layout.spacing * 0.6) {
+                accountChip(id: "", label: "All")
+                ForEach(openAccounts) { account in
+                    accountChip(id: account.id, label: account.name)
+                }
+                filterSeparatorDot
+                uncategorizedChip
+            }
+            .padding(.vertical, 2)
+        }
     }
 
-    private func accountChipLabel(_ id: String) -> String {
-        if id.isEmpty { return "All" }
-        return store.accounts.first(where: { $0.id == id })?.name ?? "Account"
+    private var openAccounts: [Account] {
+        store.accounts.filter { !$0.closed }
+    }
+
+    private func accountChip(id: String, label: String) -> some View {
+        let isSelected = accountFilter == id
+        return Button {
+            guard !isSelected else { return }
+            Haptics.tick()
+            if reduceMotion {
+                accountFilter = id
+            } else {
+                withAnimation(theme.motion.snappy) { accountFilter = id }
+            }
+        } label: {
+            Text(label)
+                .font(theme.font(.subheadline))
+                .fontWeight(isSelected ? .semibold : .regular)
+                .lineLimit(1)
+                .foregroundStyle(isSelected ? theme.palette.onAccent : theme.palette.textSecondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background {
+                    if isSelected {
+                        Capsule()
+                            .fill(theme.palette.accent)
+                            .matchedGeometryEffect(id: "accountChip.selection", in: chipNamespace)
+                    } else {
+                        Capsule()
+                            .fill(theme.palette.fill)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private var filterSeparatorDot: some View {
+        Circle()
+            .fill(theme.palette.separator)
+            .frame(width: 4, height: 4)
     }
 
     private var uncategorizedChip: some View {
@@ -159,6 +227,32 @@ struct TransactionsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Filter uncategorized")
         .accessibilityAddTraits(uncategorizedOnly ? [.isSelected] : [])
+    }
+
+    /// Reminder that the Uncategorized filter is on, shown even after the chip itself has
+    /// scrolled out of the unified row. Tapping it clears the filter directly.
+    @ViewBuilder
+    private var searchReminderDot: some View {
+        if uncategorizedOnly {
+            Button {
+                Haptics.tick()
+                if reduceMotion {
+                    uncategorizedOnly = false
+                } else {
+                    withAnimation(theme.motion.snappy) { uncategorizedOnly = false }
+                }
+            } label: {
+                Circle()
+                    .fill(theme.palette.warning)
+                    .frame(width: 9, height: 9)
+                    .padding(9)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+            .accessibilityLabel("Uncategorized filter is on")
+            .accessibilityHint("Double tap to clear it")
+        }
     }
 
     private var hasExternalFilter: Bool {

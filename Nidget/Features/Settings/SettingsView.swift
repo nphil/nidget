@@ -51,6 +51,7 @@ struct SettingsView: View {
                 serverCard
                 simpleFINCard
                 intelligenceCard
+                guideCard
                 appearanceCard
                 dashboardCard
                 securityCard
@@ -293,6 +294,16 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Guide card
+
+    private var guideCard: some View {
+        SettingsCard(title: "How Nidget Works", systemImage: "book") {
+            navRow("The five minute tour", systemImage: "map") {
+                router.push(.guide)
+            }
+        }
+    }
+
     // MARK: - Appearance card
 
     private var lightTheme: Theme {
@@ -354,7 +365,7 @@ struct SettingsView: View {
             NidgetButton("Edit Dashboard", systemImage: "pencil", role: .secondary) {
                 router.tab = .dashboard
             }
-            Text("Tap the pencil on the Dashboard tab to start editing.")
+            Text("Press and hold a tile on the Dashboard tab to start editing.")
                 .font(theme.font(.label))
                 .foregroundStyle(theme.palette.textTertiary)
         }

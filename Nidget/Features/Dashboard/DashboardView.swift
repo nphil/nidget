@@ -2,10 +2,14 @@ import SwiftUI
 
 // MARK: - DashboardView
 //
-// The Dashboard tab root: a custom header (greeting, month, tiny sync-status dot, pencil edit
-// toggle) over the one-screen widget grid. No ScrollView anywhere — the grid fills whatever
-// height remains (ARCHITECTURE §12). Owns the tab's NavigationStack so widget deep links
-// (accounts, reports) push within this tab.
+// The Dashboard tab root: a custom header (greeting, month, tiny sync-status dot) over the
+// one-screen widget grid. No ScrollView anywhere — the grid fills whatever height remains
+// (ARCHITECTURE §12). Owns the tab's NavigationStack so widget deep links (accounts, reports)
+// push within this tab.
+//
+// Edit mode has no header button anymore (UX_ROUND2 §5): a long press on any tile enters it
+// (wired inside DashboardGrid/WidgetCardButton), and a "Done" capsule floating over the grid's
+// top-trailing corner, shown only while `model.isEditing`, exits it.
 
 struct DashboardView: View {
     @Environment(AppStore.self) private var store
@@ -36,6 +40,11 @@ struct DashboardView: View {
                 emptyState
             } else {
                 DashboardGrid(model: model) { showGallery = true }
+                    .overlay(alignment: .topTrailing) {
+                        if model.isEditing {
+                            doneCapsule
+                        }
+                    }
             }
         }
         .padding(.horizontal, theme.layout.cardPadding)
@@ -65,9 +74,37 @@ struct DashboardView: View {
                 }
             }
             Spacer(minLength: theme.layout.spacing)
-            editButton
         }
         .padding(.top, theme.layout.spacing * 0.5)
+    }
+
+    // MARK: Done capsule (edit mode exit)
+
+    private var doneCapsule: some View {
+        Button {
+            Haptics.tap()
+            withAnimation(reduceMotion ? nil : theme.motion.spring) {
+                model.isEditing = false
+            }
+        } label: {
+            Text("Done")
+                .font(theme.font(.subheadline).weight(.semibold))
+                .foregroundStyle(theme.palette.onAccent)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background {
+                    Capsule()
+                        .fill(theme.palette.accent)
+                        .shadow(color: theme.effects.glowAccents
+                                ? theme.palette.accent.opacity(0.4)
+                                : .clear,
+                                radius: theme.effects.glowAccents ? 8 : 0, x: 0, y: 3)
+                }
+        }
+        .buttonStyle(PressableButtonStyle(pressAnimation: reduceMotion ? nil : theme.motion.snappy))
+        .padding(theme.layout.spacing * 0.5)
+        .transition(.scale(scale: 0.85).combined(with: .opacity))
+        .accessibilityLabel("Done editing dashboard")
     }
 
     private var greeting: String {
@@ -114,32 +151,6 @@ struct DashboardView: View {
             return pending > 0 ? "Offline, \(pending) changes pending" : "Offline"
         case .error: return "Sync error"
         }
-    }
-
-    // MARK: Edit button
-
-    private var editButton: some View {
-        Button {
-            withAnimation(reduceMotion ? nil : theme.motion.spring) {
-                model.isEditing.toggle()
-            }
-        } label: {
-            Image(systemName: model.isEditing ? "checkmark" : "pencil")
-                .font(theme.font(.headline))
-                .fontWeight(theme.icons.weight)
-                .symbolVariant(theme.icons.fill ? .fill : .none)
-                .foregroundStyle(model.isEditing ? theme.palette.onAccent : theme.palette.accent)
-                .frame(width: 44, height: 44)
-                .background {
-                    Circle().fill(model.isEditing
-                                  ? AnyShapeStyle(theme.palette.accent)
-                                  : AnyShapeStyle(theme.palette.fill))
-                }
-                .contentShape(Circle())
-                .contentTransition(.symbolEffect(.replace))
-        }
-        .buttonStyle(PressableButtonStyle(pressAnimation: reduceMotion ? nil : theme.motion.snappy))
-        .accessibilityLabel(model.isEditing ? "Done editing" : "Edit dashboard")
     }
 
     // MARK: Empty state

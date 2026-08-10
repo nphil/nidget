@@ -33,6 +33,7 @@ struct RootView: View {
 private struct RootContentView: View {
     @Environment(AppStore.self) private var store
     @Environment(AppRouter.self) private var router
+    @Environment(Preferences.self) private var preferences
     @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,6 +41,10 @@ private struct RootContentView: View {
     /// Survives the .needsFilePick → .syncingFirstTime → .needsFilePick round trip that a
     /// failed `selectFile` causes, so the recreated FilePickView can still show the failure.
     @State private var filePickError: String?
+
+    /// Presents the Guide over the first `.ready` state; any dismissal (Skip or "Start
+    /// budgeting") marks `Preferences.hasSeenGuide` so it never auto-presents again.
+    @State private var showGuide = false
 
     private static let quickAddTabs: [AppTab] = [.dashboard, .budget, .transactions]
 
@@ -106,6 +111,17 @@ private struct RootContentView: View {
         .sheet(isPresented: $router.quickAddPresented) {
             QuickAddView()
                 .presentationDetents([.height(560), .large])
+        }
+        .fullScreenCover(isPresented: $showGuide, onDismiss: { preferences.hasSeenGuide = true }) {
+            GuideView()
+        }
+        .onAppear {
+            // readyView only exists while setup == .ready, so this fires exactly when the app
+            // first becomes usable — right after the first sync, or on a later cold launch if
+            // the Guide was never seen.
+            if !preferences.hasSeenGuide {
+                showGuide = true
+            }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             // OpenQuickAddIntent (Platform/AppShortcuts.swift) opens the app and requests the

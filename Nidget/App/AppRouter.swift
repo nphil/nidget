@@ -26,6 +26,7 @@ enum Route: Hashable {
     case manageCategories
     case intelligence
     case aiBenchmark
+    case guide
 }
 
 // MARK: - AppRouter
@@ -108,6 +109,8 @@ private struct RouteDestinationsModifier: ViewModifier {
                 IntelligenceView()
             case .aiBenchmark:
                 AIBenchmarkView()
+            case .guide:
+                GuideView(embedded: true)
             }
         }
     }
