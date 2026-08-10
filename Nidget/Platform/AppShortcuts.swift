@@ -105,6 +105,8 @@ struct AddTransactionIntent: AppIntent {
         return -Int64((clamped * 100).rounded())
     }
 
+    /// Reads `AppStore`/`Preferences` state, so it must run on the main actor like `perform()`.
+    @MainActor
     private static func resolveAccountID(named name: String?, store: AppStore) -> String? {
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty, let matched = matchAccount(named: trimmed, in: store.accounts) {

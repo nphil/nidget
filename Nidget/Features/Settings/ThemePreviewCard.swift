@@ -65,7 +65,7 @@ struct ThemePreviewCard: View {
 
     private var miniature: some View {
         ZStack {
-            Backdrop(style: theme.palette.backdrop)
+            Backdrop(style: theme.palette.backdrop, animated: false)
             if theme.effects.noiseOpacity > 0 {
                 NoiseTexture.tiled
                     .opacity(theme.effects.noiseOpacity)
@@ -76,7 +76,6 @@ struct ThemePreviewCard: View {
             }
             .padding(6)
         }
-        .environment(\.accessibilityReduceMotion, true)
         .allowsHitTesting(false)
         .drawingGroup()
     }

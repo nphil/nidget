@@ -9,9 +9,14 @@ import UIKit
 
 struct Backdrop: View {
     let style: BackdropStyle
+    /// When false, time-based motion is skipped entirely. The theme gallery renders dozens of
+    /// miniature backdrops at once and needs them static; `accessibilityReduceMotion` cannot be
+    /// injected to achieve that because it is a read-only environment value.
+    let animated: Bool
 
-    init(style: BackdropStyle) {
+    init(style: BackdropStyle, animated: Bool = true) {
         self.style = style
+        self.animated = animated
     }
 
     var body: some View {
@@ -22,7 +27,7 @@ struct Backdrop: View {
             LinearGradient(colors: colors.isEmpty ? [Color.gray] : colors,
                            startPoint: .top, endPoint: .bottom)
         case .mesh(let colors):
-            MeshBackdrop(colors: colors)
+            MeshBackdrop(colors: colors, animated: animated)
         case .aurora(let base, let glows):
             AuroraBackdrop(base: base, glows: glows)
         case .horizon(let top, let bottom, let accentLine):
@@ -39,13 +44,14 @@ struct Backdrop: View {
 /// Reduce Motion.
 private struct MeshBackdrop: View {
     let colors: [Color]
+    var animated: Bool = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let palette = colors.isEmpty ? [Color.gray] : colors
         let meshColors = (0..<9).map { palette[$0 % palette.count] }
-        if reduceMotion {
+        if reduceMotion || !animated {
             Rectangle()
                 .fill(MeshGradient(width: 3, height: 3,
                                    points: Self.points(at: 0),
