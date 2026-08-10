@@ -22,6 +22,14 @@ final class Preferences {
         static let retirementConfigJSON = "nidget.pref.retirementConfigJSON"
         static let defaultAccountID = "nidget.pref.defaultAccountID"
         static let simplefinAccountMapJSON = "nidget.pref.simplefinAccountMapJSON"
+        static let aiCustomModelsJSON = "nidget.pref.aiCustomModelsJSON"
+        static let aiEmbeddingModelID = "nidget.pref.aiEmbeddingModelID"
+        static let aiGenerationModelID = "nidget.pref.aiGenerationModelID"
+        static let aiBackend = "nidget.pref.aiBackend"
+        static let aiAutoUnloadMinutes = "nidget.pref.aiAutoUnloadMinutes"
+        static let aiSemanticSearch = "nidget.pref.aiSemanticSearch"
+        static let aiQuickAddSuggestions = "nidget.pref.aiQuickAddSuggestions"
+        static let aiAutoCategorize = "nidget.pref.aiAutoCategorize"
     }
 
     /// Serialized `[DashboardItem]` (Features/Dashboard). Empty string = use the default layout.
@@ -68,6 +76,58 @@ final class Preferences {
         didSet { UserDefaults.standard.set(simplefinAccountMapJSON, forKey: Key.simplefinAccountMapJSON) }
     }
 
+    /// Serialized `[ModelSpec]` — user-added GGUF models (AI). Empty string = none.
+    var aiCustomModelsJSON: String {
+        didSet { UserDefaults.standard.set(aiCustomModelsJSON, forKey: Key.aiCustomModelsJSON) }
+    }
+
+    /// Selected embedding model id (AI); nil = none selected.
+    var aiEmbeddingModelID: String? {
+        didSet {
+            if let aiEmbeddingModelID {
+                UserDefaults.standard.set(aiEmbeddingModelID, forKey: Key.aiEmbeddingModelID)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Key.aiEmbeddingModelID)
+            }
+        }
+    }
+
+    /// Selected generation model id (AI); nil = none selected.
+    var aiGenerationModelID: String? {
+        didSet {
+            if let aiGenerationModelID {
+                UserDefaults.standard.set(aiGenerationModelID, forKey: Key.aiGenerationModelID)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Key.aiGenerationModelID)
+            }
+        }
+    }
+
+    /// Raw `LlamaBackend` for the AI engines ("auto" / "gpu" / "cpu").
+    var aiBackend: String {
+        didSet { UserDefaults.standard.set(aiBackend, forKey: Key.aiBackend) }
+    }
+
+    /// Minutes of idle time before a loaded AI model is freed (0 = never).
+    var aiAutoUnloadMinutes: Int {
+        didSet { UserDefaults.standard.set(aiAutoUnloadMinutes, forKey: Key.aiAutoUnloadMinutes) }
+    }
+
+    /// Blend semantic matches into transaction search when an embedding model is installed.
+    var aiSemanticSearch: Bool {
+        didSet { UserDefaults.standard.set(aiSemanticSearch, forKey: Key.aiSemanticSearch) }
+    }
+
+    /// Offer AI category suggestions in Quick Add for unknown payees.
+    var aiQuickAddSuggestions: Bool {
+        didSet { UserDefaults.standard.set(aiQuickAddSuggestions, forKey: Key.aiQuickAddSuggestions) }
+    }
+
+    /// Auto-apply high-confidence category suggestions during SimpleFIN import.
+    var aiAutoCategorize: Bool {
+        didSet { UserDefaults.standard.set(aiAutoCategorize, forKey: Key.aiAutoCategorize) }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         dashboardLayoutJSON = defaults.string(forKey: Key.dashboardLayoutJSON) ?? ""
@@ -78,6 +138,14 @@ final class Preferences {
         retirementConfigJSON = defaults.string(forKey: Key.retirementConfigJSON) ?? ""
         defaultAccountID = defaults.string(forKey: Key.defaultAccountID)
         simplefinAccountMapJSON = defaults.string(forKey: Key.simplefinAccountMapJSON) ?? "{}"
+        aiCustomModelsJSON = defaults.string(forKey: Key.aiCustomModelsJSON) ?? ""
+        aiEmbeddingModelID = defaults.string(forKey: Key.aiEmbeddingModelID)
+        aiGenerationModelID = defaults.string(forKey: Key.aiGenerationModelID)
+        aiBackend = defaults.string(forKey: Key.aiBackend) ?? "auto"
+        aiAutoUnloadMinutes = defaults.object(forKey: Key.aiAutoUnloadMinutes) as? Int ?? 5
+        aiSemanticSearch = defaults.object(forKey: Key.aiSemanticSearch) as? Bool ?? true
+        aiQuickAddSuggestions = defaults.object(forKey: Key.aiQuickAddSuggestions) as? Bool ?? true
+        aiAutoCategorize = defaults.bool(forKey: Key.aiAutoCategorize)
         // didSet does not run during init — push the loaded value explicitly.
         CurrencyFormatter.currencyCode = currencyCode
     }

@@ -233,6 +233,35 @@ enum Mutations {
         [CellWrite(dataset: dataset, row: id, column: "name", value: .string(name))]
     }
 
+    /// Toggles the `hidden` flag on a category or group (`isGroup` selects the dataset).
+    static func hideCategory(id: String, hidden: Bool, isGroup: Bool) -> [CellWrite] {
+        [CellWrite(dataset: isGroup ? "category_groups" : "categories",
+                  row: id, column: "hidden", value: bool(hidden))]
+    }
+
+    /// Reassigns a category to a different group (`cat_group`, PROTOCOL §8.4 — the raw column
+    /// backing the public `group` name).
+    static func moveCategory(id: String, toGroup groupID: String) -> [CellWrite] {
+        [CellWrite(dataset: "categories", row: id, column: "cat_group", value: .string(groupID))]
+    }
+
+    /// Single-cell `sort_order` write — the shared building block behind drag-to-reorder for
+    /// both `categories` and `category_groups` (`dataset` selects which).
+    static func setSortOrder(dataset: String, id: String, sortOrder: Double) -> [CellWrite] {
+        [CellWrite(dataset: dataset, row: id, column: "sort_order", value: .number(sortOrder))]
+    }
+
+    /// Soft-deletes a category.
+    static func deleteCategory(id: String) -> [CellWrite] {
+        softDelete(dataset: "categories", id: id)
+    }
+
+    /// Soft-deletes a category group. Callers are responsible for ensuring the group is empty
+    /// first (AppStore.deleteCategoryGroup) — Mutations stays a pure builder with no such checks.
+    static func deleteCategoryGroup(id: String) -> [CellWrite] {
+        softDelete(dataset: "category_groups", id: id)
+    }
+
     // MARK: - Value helpers
 
     private static func bool(_ value: Bool) -> CRDTValue {

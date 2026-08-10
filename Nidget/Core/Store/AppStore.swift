@@ -414,6 +414,11 @@ final class AppStore {
             }
         }
 
+        // The semantic index is derived from budget data — it lives beside the budget file
+        // (Documents/nidget-ai.sqlite) and must be wiped with it. Routed through the actor
+        // so the file is closed before deletion (WAL siblings included).
+        await EmbeddingIndex.shared.deleteDatabaseFile()
+
         for key in [KeychainKey.serverURL, KeychainKey.password, KeychainKey.token,
                     KeychainKey.fileID, KeychainKey.groupID, KeychainKey.e2ePassword,
                     KeychainKey.simplefinAccessURL] {
@@ -822,6 +827,119 @@ final class AppStore {
         await perform(Mutations.rename(dataset: isGroup ? "category_groups" : "categories",
                                        id: id, name: trimmed),
                       failureMessage: "Couldn't rename")
+    }
+
+    /// Hides or unhides a category or a category group. Hidden categories/groups keep syncing
+    /// and keep every historical transaction pointed at them — `BudgetDatabase.categoryGroups()`
+    /// still returns them (with `hidden: true`) so ManageCategoriesView can list and un-hide
+    /// them; only `BudgetView`'s own display filters (`visibleGroups`/`visibleCategories`) hide
+    /// them from the everyday budgeting surface.
+    func setCategoryHidden(id: String, hidden: Bool, isGroup: Bool) async {
+        await perform(Mutations.hideCategory(id: id, hidden: hidden, isGroup: isGroup),
+                      failureMessage: "Couldn't update the category")
+    }
+
+    /// Moves a category into a different group. Refused (via `lastError`, no write sent) when
+    /// the category or the target group can't be found, or when the move would cross the
+    /// income/spending boundary — Actual keeps income and spending categories in separate group
+    /// families, so a category's `is_income` must always agree with its containing group's.
+    func moveCategory(id: String, toGroup groupID: String) async {
+        guard let category = categoryGroups.flatMap(\.categories).first(where: { $0.id == id }) else {
+            lastError = AppError(message: "Couldn't move the category",
+                                 detail: "That category no longer exists.")
+            return
+        }
+        guard let targetGroup = categoryGroups.first(where: { $0.id == groupID }) else {
+            lastError = AppError(message: "Couldn't move the category",
+                                 detail: "That category group no longer exists.")
+            return
+        }
+        guard targetGroup.isIncome == category.isIncome else {
+            lastError = AppError(message: "Couldn't move the category",
+                                 detail: "Income categories and spending categories can't share a group.")
+            return
+        }
+        await perform(Mutations.moveCategory(id: id, toGroup: groupID),
+                      failureMessage: "Couldn't move the category")
+    }
+
+    /// Batch-reorders every category in `groupID` to match `orderedIDs`, writing `sort_order`
+    /// 1...n in ONE enqueued batch — drag-to-reorder shouldn't create N separate sync round-trips
+    /// or N flickers of a partially-reordered list.
+    func reorderCategories(inGroup groupID: String, orderedIDs: [String]) async {
+        var writes: [Mutations.CellWrite] = []
+        for (index, id) in orderedIDs.enumerated() {
+            writes += Mutations.setSortOrder(dataset: "categories", id: id, sortOrder: Double(index + 1))
+        }
+        await perform(writes, failureMessage: "Couldn't reorder categories")
+    }
+
+    /// Batch-reorders category groups of one income-ness (`isIncome` documents intent for
+    /// callers; the writes themselves are keyed purely by id) to match `orderedIDs`, same
+    /// one-batch shape as `reorderCategories`.
+    func reorderGroups(orderedIDs: [String], isIncome: Bool) async {
+        var writes: [Mutations.CellWrite] = []
+        for (index, id) in orderedIDs.enumerated() {
+            writes += Mutations.setSortOrder(dataset: "category_groups", id: id, sortOrder: Double(index + 1))
+        }
+        await perform(writes, failureMessage: "Couldn't reorder groups")
+    }
+
+    /// Deletes a category. Every non-tombstoned, non-split-parent transaction currently pointing
+    /// at it (`BudgetDatabase.transactions(_:)` already excludes tombstoned/parent rows) is first
+    /// re-pointed to `newCategoryID`, or cleared to NULL when nil ("leave uncategorized") — fetched
+    /// via paged `TransactionQuery(categoryID:)` reads (the query's own default `limit` is only
+    /// 100, so a category with more transactions than one page needs the loop below), then all
+    /// the reassignment writes plus the category's own tombstone write are sent as ONE enqueued
+    /// batch. Budget cells (`zero_budgets`) for a tombstoned category are NOT touched here: once
+    /// the category is gone, `spentByCategory`/`budgetCells` can no longer resolve its id through
+    /// `category_mapping`, so BudgetCalculator simply never sees those cells again — nothing to
+    /// clean up.
+    func deleteCategory(id: String, reassignTo newCategoryID: String?) async {
+        guard let dbQueue else {
+            lastError = AppError(message: "Couldn't delete the category", detail: "No budget file is open.")
+            return
+        }
+        let pageSize = 500
+        var writes: [Mutations.CellWrite] = []
+        var offset = 0
+        while true {
+            let currentOffset = offset   // shadowed before capture — see refreshMonthSnapshot's `m`
+            let page = (try? await dbQueue.read({ db -> [Transaction] in
+                try db.transactions(TransactionQuery(categoryID: id, months: nil,
+                                                     limit: pageSize, offset: currentOffset))
+            })) ?? []
+            guard !page.isEmpty else { break }
+            let newValue: CRDTValue = newCategoryID.map { .string($0) } ?? .null
+            for transaction in page {
+                writes += Mutations.updateFields(dataset: "transactions", id: transaction.id,
+                                                 fields: [(column: "category", value: newValue)])
+            }
+            offset += page.count
+            if page.count < pageSize { break }
+        }
+        writes += Mutations.deleteCategory(id: id)
+        await perform(writes, failureMessage: "Couldn't delete the category")
+    }
+
+    /// Deletes a category group — but only once every category that was ever in it is gone.
+    /// `categoryGroups` already excludes tombstoned categories (`BudgetDatabase.categoryGroups()`
+    /// filters `tombstone = 0`), so an empty `group.categories` here means exactly "every
+    /// category that lived here is tombstoned or was moved out". Otherwise sets `lastError`
+    /// explaining to move or delete its categories first, rather than tombstoning a group that
+    /// still has live children (which would orphan them on decode).
+    func deleteCategoryGroup(id: String) async {
+        guard let group = categoryGroups.first(where: { $0.id == id }) else {
+            lastError = AppError(message: "Couldn't delete the group",
+                                 detail: "That category group no longer exists.")
+            return
+        }
+        guard group.categories.isEmpty else {
+            lastError = AppError(message: "Couldn't delete the group",
+                                 detail: "Move or delete its categories first.")
+            return
+        }
+        await perform(Mutations.deleteCategoryGroup(id: id), failureMessage: "Couldn't delete the group")
     }
 
     /// Returns the id the payee ends up with: an existing payee on a case-insensitive name

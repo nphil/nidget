@@ -29,6 +29,7 @@ struct BudgetView: View {
     @State private var editingRow: BudgetRowSnapshot?
     @State private var moveMoneyTarget: MoveMoneyTarget?
     @State private var categoryEditor: CategoryEditorMode?
+    @State private var categoryDeleteTarget: Category?
 
     init() {}
 
@@ -50,6 +51,19 @@ struct BudgetView: View {
         .themedScreen()
         .navigationTitle("Budget")
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Haptics.tick()
+                    router.push(.manageCategories)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .fontWeight(theme.icons.weight)
+                        .symbolVariant(theme.icons.fill ? .fill : .none)
+                }
+                .accessibilityLabel("Manage Categories")
+            }
+        }
         .task(id: store.currentMonth) { await loadIncomeReceived() }
         .sheet(item: $editingRow) { row in
             BudgetAmountEditor(row: row, month: store.currentMonth)
@@ -62,6 +76,11 @@ struct BudgetView: View {
         .sheet(item: $moveMoneyTarget) { target in
             MoveMoneySheet(month: store.currentMonth, initialFromCategoryID: target.categoryID)
                 .presentationDetents([.height(480), .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $categoryDeleteTarget) { category in
+            DeleteCategorySheet(category: category)
+                .presentationDetents([.height(420), .large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -313,12 +332,66 @@ struct BudgetView: View {
                 }
                 .tint(theme.palette.accent)
             }
+            .contextMenu {
+                categoryRowContextMenu(row)
+            }
     }
 
     private func openSpentTransactions(_ row: BudgetRowSnapshot) {
         Haptics.tick()
         let month = store.currentMonth
         router.openTransactions(filter: TransactionQuery(categoryID: row.id, months: month...month))
+    }
+
+    // MARK: Category management shortcuts
+    //
+    // A fast path for the three most common edits without leaving Budget — CategoryRow is
+    // cleanly extensible via this `categoryRowItem` wrapper, so the context menu lives here
+    // rather than inside CategoryRow.swift itself (owned elsewhere). ManageCategoriesView remains
+    // the full surface (reordering, viewing/un-hiding hidden categories and groups). Every row
+    // shown here is already non-hidden (`rows(for:)` filters through `visibleCategories`), so
+    // "Hide" never needs an "Unhide" counterpart in this menu.
+
+    @ViewBuilder
+    private func categoryRowContextMenu(_ row: BudgetRowSnapshot) -> some View {
+        Button {
+            Haptics.tap()
+            categoryEditor = .rename(id: row.id, currentName: row.name, isGroup: false)
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        Button {
+            Haptics.tick()
+            Task { await store.setCategoryHidden(id: row.id, hidden: true, isGroup: false) }
+        } label: {
+            Label("Hide", systemImage: "eye.slash")
+        }
+        let targets = otherGroups(for: row)
+        if !targets.isEmpty {
+            Menu {
+                ForEach(targets) { group in
+                    Button(group.name) {
+                        Haptics.tick()
+                        Task { await store.moveCategory(id: row.id, toGroup: group.id) }
+                    }
+                }
+            } label: {
+                Label("Move to Group…", systemImage: "folder")
+            }
+        }
+        Button(role: .destructive) {
+            Haptics.tap()
+            categoryDeleteTarget = store.categoryGroups
+                .flatMap(\.categories)
+                .first(where: { $0.id == row.id })
+        } label: {
+            Label("Delete…", systemImage: "trash")
+        }
+    }
+
+    /// Other groups sharing `row`'s income-ness — the only legal `moveCategory` targets.
+    private func otherGroups(for row: BudgetRowSnapshot) -> [CategoryGroup] {
+        store.categoryGroups.filter { $0.isIncome == row.isIncome && $0.id != row.groupID }
     }
 
     // MARK: Income section
