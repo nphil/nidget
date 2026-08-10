@@ -11,6 +11,13 @@ on:
 permissions:
   contents: write
 
+# Two pushes in quick succession used to race: both checked out a tree whose pbxproj named the
+# same version, so the second run built fine and then died tagging an existing release. Serialize
+# instead of cancelling — every commit still gets built and published, just in order.
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build and release
@@ -29,13 +36,22 @@ jobs:
       - name: Compute next version
         id: ver
         run: |
-          # Versions live in the pbxproj build settings (Info.plist uses $(MARKETING_VERSION)).
-          CURRENT=$(grep -m1 'MARKETING_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
-          BUILD=$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          PATCH=${PATCH:-0}
+          # Derive the next version from the highest PUBLISHED tag, not from the checked-out
+          # pbxproj. The checkout reflects whatever this commit happened to carry, which goes stale
+          # the moment another run publishes — that raced two runs onto the same tag. Tags are the
+          # actual record of what shipped, so this stays correct however runs interleave.
+          git fetch --tags --force --quiet
+          LATEST=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            # No releases yet — seed from the project's own version.
+            LATEST=$(grep -m1 'MARKETING_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
+          fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST"
+          MAJOR=${MAJOR:-1}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
           NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
-          NEW_BUILD="$((BUILD + 1))"
+          # Build number tracks the release count, so it rises monotonically like the version does.
+          NEW_BUILD=$(( $(git tag -l 'v*' | wc -l | tr -d ' ') + 1 ))
+          echo "Latest released: ${LATEST:-none} -> building $NEW_VER (build $NEW_BUILD)"
           echo "version=$NEW_VER" >> "$GITHUB_OUTPUT"
           echo "build=$NEW_BUILD"  >> "$GITHUB_OUTPUT"
           echo "tag=v$NEW_VER"     >> "$GITHUB_OUTPUT"
