@@ -127,7 +127,7 @@ actor EmbeddingIndex {
 
             await AIModelManager.shared.setIndexingProgress(AIIndexingProgress(done: 0, total: total))
 
-            let engine = AIModelManager.shared.embedder
+            let engine = await AIModelManager.shared.embedder
             var done = 0
             var batchStart = 0
             while batchStart < work.count {
@@ -220,7 +220,7 @@ actor EmbeddingIndex {
     func indexedCount() async -> Int {
         guard let database = try? openDatabase(),
               let value = try? database.scalar("SELECT COUNT(*) FROM tx_embeddings", []),
-              case .some(.int(let count)) = value else { return 0 }
+              case .int(let count) = value else { return 0 }
         return Int(count)
     }
 
