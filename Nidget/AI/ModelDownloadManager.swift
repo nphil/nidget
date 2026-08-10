@@ -163,6 +163,9 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate {
     }
 
     func cancel() {
+        // Mark finished so the late didCompleteWithError(NSURLErrorCancelled) delivery
+        // can't fire onComplete and clobber a redownload started after this cancel.
+        finished = true
         task?.cancel()
         session?.invalidateAndCancel()
     }

@@ -16,7 +16,10 @@ REPO_ROOT="$(pwd)"
 LLAMA_PIN="0ed235ea2c17a19fc8238668653946721ed136fd"
 LLAMA_DIR="build/llama.cpp"
 
-if [ ! -f "${LLAMA_DIR}/CMakeLists.txt" ]; then
+# Re-clone when missing OR when a leftover checkout isn't at LLAMA_PIN (a stale
+# local build/llama.cpp would otherwise silently compile the old commit).
+if [ ! -f "${LLAMA_DIR}/CMakeLists.txt" ] || \
+   [ "$(git -C "${LLAMA_DIR}" rev-parse HEAD 2>/dev/null)" != "${LLAMA_PIN}" ]; then
     echo "Cloning llama.cpp at ${LLAMA_PIN}..."
     rm -rf "${LLAMA_DIR}"
     mkdir -p build
