@@ -14,6 +14,8 @@ taps.
   everything fits without scrolling.
 - **3-tap transaction capture** with payee/category learning, from any tab, plus Siri/Shortcuts.
 - **SimpleFIN bank import** with dedupe and account mapping.
+- **On-device AI (llama.cpp)**: categorization suggestions and semantic search with models you
+  download from Hugging Face — nothing leaves the phone.
 - **Retirement planning**: FI number, Monte Carlo projection bands, success probability,
   coast-FIRE age — driven by your real accounts and spending.
 - **Security**: credentials in the Keychain, optional Face ID lock, privacy blur in the app
@@ -46,9 +48,18 @@ Then jump to [First run](#first-run) to point the app at your server.
 
 ## Building from source
 
-1. Clone the repo and open `Nidget.xcodeproj` in Xcode.
-2. Select the *Nidget* target → Signing & Capabilities → pick your team (automatic signing).
-3. Build & run on your device.
+1. Clone the repo and fetch the prebuilt AI engine (one-time step before opening Xcode):
+
+   ```
+   bash scripts/fetch-llama-xcframework.sh
+   ```
+
+   This downloads `llama.xcframework` into the gitignored `Frameworks/` directory. The framework
+   is built from a pinned llama.cpp commit by the *Build llama.xcframework* GitHub workflow and
+   published as a `llama-<pin>` prerelease asset, so the repo itself stays lean — no Git LFS.
+2. Open `Nidget.xcodeproj` in Xcode.
+3. Select the *Nidget* target → Signing & Capabilities → pick your team (automatic signing).
+4. Build & run on your device.
 
 No packages to resolve — the app has zero third-party dependencies. New `.swift` files under
 `Nidget/` are picked up automatically (the project uses filesystem-synchronized groups, so there is
@@ -56,7 +67,11 @@ no file list to maintain in the pbxproj).
 
 ### Release pipeline
 
-`.github/workflows/ios-build.yml` runs on every push to `main`: it bumps the version, builds
+`.github/workflows/ios-build.yml` runs on every push to `main`: it restores `llama.xcframework`
+from the Actions cache (keyed on the pinned llama.cpp commit) and runs
+`scripts/fetch-llama-xcframework.sh` — a no-op on a cache hit, otherwise a download of the
+`llama-<pin>` prerelease asset published by the *Build llama.xcframework* workflow (run that one
+first, and again whenever the pin bumps). Then it bumps the version, builds
 unsigned (`CODE_SIGNING_ALLOWED=NO`), fails fast on real compiler diagnostics (annotated inline on
 the diff), verifies the packaged `.app` actually contains an executable, publishes a GitHub Release
 with `Nidget.ipa`, and patches `apps.json` — which is what Option A above reads, so a push is all it

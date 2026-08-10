@@ -3,6 +3,7 @@ xcuserdata/
 *.xcuserstate
 DerivedData/
 build/
+Frameworks/
 *.ipa
 *.dSYM.zip
 .swiftpm/

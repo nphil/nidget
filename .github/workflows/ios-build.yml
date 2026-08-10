@@ -33,6 +33,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The prebuilt llama.xcframework is a release asset (see build-llama-xcframework.yml),
+      # not a repo file. Cache it keyed on the llama.cpp pin (the pin lives in the build
+      # script, so hashing the script tracks it); the fetch step below no-ops on a hit.
+      - name: Cache llama.xcframework
+        uses: actions/cache@v4
+        with:
+          path: Frameworks/llama.xcframework
+          key: llama-xcframework-${{ hashFiles('scripts/build-llama-xcframework.sh') }}
+
+      - name: Fetch llama.xcframework
+        run: bash scripts/fetch-llama-xcframework.sh
+
       - name: Compute next version
         id: ver
         run: |
