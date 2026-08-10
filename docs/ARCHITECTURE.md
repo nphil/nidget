@@ -485,7 +485,10 @@ enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire
 RootView: `TabView` with the 5 tabs (iOS 26 `Tab` API), `.tint(theme.palette.accent)`; a
 **floating Quick Add button** overlays the tab bar area on dashboard/budget/transactions tabs
 (bottom-trailing, 56pt, accent circle w/ theme card treatment, `Haptics.tap`, opens
-`router.quickAddPresented` sheet with `.presentationDetents([.height(560), .large])`).
+`router.quickAddPresented` sheet with `.presentationDetents([.height(560), .large])`). It shows
+only while that tab is at its root — `AppRouter.isAtRoot(of:)` — so it fades out over pushed
+sub-screens (Manage Categories, account detail, Reports, Theme Gallery, Intelligence, Guide)
+and fades back in on pop.
 Also hosts: sync status pill (top, appears during sync / offline with pending count), error toast,
 privacy-mode blur when app resigns active (`scenePhase`), `AppLockScreen` gate when
 `Preferences.biometricLock` (LocalAuthentication, `.faceID`; locks on background, 8s grace).
@@ -502,7 +505,14 @@ amount (AmountText .display, green/red); grouped category rows: name, budgeted (
 `BudgetAmountEditor` sheet w/ keypad), spent (tap → filtered transactions), balance pill (colorized,
 carryover indicator). Swipe actions: move money (opens `MoveMoneySheet`: from/to category pickers +
 keypad). Progress bar per category (spent/budgeted) using theme accent gradient. Income group
-collapsed by default.
+collapsed by default. Each group header carries a trailing "+" that creates a category in that
+group; whole GROUPS are created in `ManageCategoriesView`, not from this list.
+
+**Manage Categories** (`ManageCategoriesView`, pushed from Budget's toolbar): every group and
+category including hidden ones, one Section per group, per-`ForEach` `.onMove` reordering, and
+context menus for rename / hide / move / delete. With `EditButton` on, naming becomes first-class:
+tapping any group header or category row opens its rename sheet, each group gains an inline "Add
+category" row, and the list ends with "New group".
 
 **Transactions** (`TransactionsView`): searchable list (`.searchable`), grouped by day
 (SectionHeader with relative dates), rows: payee, category chip, notes line, AmountText, cleared
@@ -579,6 +589,7 @@ enum Route: Hashable {
   var quickAddPresented = false
   var pendingTransactionFilter: TransactionQuery?   // consumed by TransactionsView .task(id:)
   func push(_ route: Route)                         // appends to the CURRENT tab's path
+  func isAtRoot(of tab: AppTab) -> Bool             // that tab's path is empty (gates the Quick Add FAB)
   func openAccount(_ id: String)                    // push(.account(id))
   func openReports()                                // push(.reports)
   func openTransactions(filter: TransactionQuery)   // set pendingTransactionFilter, tab = .transactions

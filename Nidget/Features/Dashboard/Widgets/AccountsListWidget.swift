@@ -9,7 +9,7 @@ import SwiftUI
 // The larger spans can't route through `WidgetCardButton` like every other widget — its rows
 // deep-link to different accounts, not one whole-card action — so `listBody` attaches
 // `widgetCardEditGestures()` (DashboardGrid.swift) directly to keep the same long-press-to-edit
-// and swipe-glow behavior every other tile gets (UX_ROUND2 §5 follow-up).
+// and edge-glow behavior every other tile gets (UX_ROUND2 §5 follow-up).
 
 struct AccountsListWidget: View {
     let span: WidgetSpan

@@ -10,6 +10,11 @@ import SwiftUI
 // Edit mode has no header button anymore (UX_ROUND2 §5): a long press on any tile enters it
 // (wired inside DashboardGrid/WidgetCardButton), and a "Done" capsule floating over the grid's
 // top-trailing corner, shown only while `model.isEditing`, exits it.
+//
+// The screen doesn't scroll, so a drag anywhere on it swells an accent glow at the edge you're
+// pulling away from (DashboardEdgeGlow, DashboardGrid.swift). The pressure lives in `pullState`,
+// which only the glow overlay reads: the overlay is a sibling of the grid, so a drag redraws two
+// gradients and nothing else — no tile, no widget, no layout pass.
 
 struct DashboardView: View {
     @Environment(AppStore.self) private var store
@@ -19,6 +24,7 @@ struct DashboardView: View {
 
     private let model = DashboardModel.shared
 
+    @State private var pullState = DashboardPullState()
     @State private var showGallery = false
 
     init() {}
@@ -39,7 +45,7 @@ struct DashboardView: View {
             if model.items.isEmpty {
                 emptyState
             } else {
-                DashboardGrid(model: model) { showGallery = true }
+                DashboardGrid(model: model, pullState: pullState) { showGallery = true }
                     .overlay(alignment: .topTrailing) {
                         if model.isEditing {
                             doneCapsule
@@ -50,6 +56,7 @@ struct DashboardView: View {
         .padding(.horizontal, theme.layout.cardPadding)
         .padding(.bottom, theme.layout.spacing * 0.5)
         .themedScreen()
+        .overlay { DashboardEdgeGlow(state: pullState) }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showGallery) {
             WidgetGallerySheet(model: model)

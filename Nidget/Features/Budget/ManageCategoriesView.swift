@@ -15,15 +15,26 @@ import SwiftUI
 // another group's rows; reordering GROUPS themselves isn't wired into this screen (only
 // `AppStore.reorderGroups` exists, for a future affordance) to keep this drag surface to the one
 // pattern that's unambiguously supported (per-`ForEach` `.onMove`, not `Section`-level).
+//
+// Edit mode (the toolbar's Edit button) is where naming lives. The long-press context menus are
+// still here and still useful, but nobody finds a long press: with Edit on, every group and
+// category row taps straight into its rename sheet, each group grows an "Add category" row, and
+// the list ends with "New group". Everything in this screen's job is then visible at once.
 
 struct ManageCategoriesView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.theme) private var theme
+    @Environment(\.editMode) private var editMode
 
     @State private var categoryEditor: CategoryEditorMode?
     @State private var deleteTarget: Category?
 
     init() {}
+
+    /// True while the toolbar's Edit button has the list in edit mode.
+    private var isEditing: Bool {
+        editMode?.wrappedValue.isEditing ?? false
+    }
 
     var body: some View {
         content
@@ -52,7 +63,12 @@ struct ManageCategoriesView: View {
         if store.categoryGroups.isEmpty {
             EmptyStateView(systemImage: "folder.badge.questionmark",
                            title: "No categories yet",
-                           message: "Categories you add in Budget will show up here for renaming, hiding, moving, and deleting.")
+                           message: "Groups hold your categories. Start one here, then fill it with the things you spend on.",
+                           actionTitle: "New Group",
+                           action: {
+                               Haptics.tap()
+                               categoryEditor = .newGroup(isIncome: false)
+                           })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             categoryList
@@ -66,6 +82,9 @@ struct ManageCategoriesView: View {
             }
             ForEach(incomeGroups) { group in
                 groupSection(group)
+            }
+            if isEditing {
+                newGroupRow
             }
         }
         .listStyle(.plain)
@@ -106,38 +125,93 @@ struct ManageCategoriesView: View {
             .onMove { source, destination in
                 moveCategories(in: group, from: source, to: destination)
             }
+            if isEditing {
+                addCategoryRow(in: group)
+            }
         } header: {
             groupHeader(group)
         }
     }
 
+    /// While editing, the whole header is the rename target. The context menu rides along in both
+    /// modes, so nothing anyone already learned stops working.
     private func groupHeader(_ group: CategoryGroup) -> some View {
-        SectionHeader(group.name, trailing: { AnyView(groupHeaderTrailing(group)) })
-            .padding(.top, theme.layout.spacing * 0.5)
-            .contextMenu {
+        Group {
+            if isEditing {
                 Button {
                     Haptics.tap()
                     categoryEditor = .rename(id: group.id, currentName: group.name, isGroup: true)
                 } label: {
-                    Label("Rename", systemImage: "pencil")
+                    groupHeaderLabel(group)
                 }
-                Button {
-                    Task { await toggleHidden(group) }
-                } label: {
-                    Label(group.hidden ? "Unhide" : "Hide",
-                          systemImage: group.hidden ? "eye" : "eye.slash")
-                }
-                Button(role: .destructive) {
-                    Task { await deleteGroup(group) }
-                } label: {
-                    Label(group.categories.isEmpty ? "Delete" : "Delete (move categories first)",
-                          systemImage: "trash")
-                }
-                .disabled(!group.categories.isEmpty)
+                .buttonStyle(.plain)
+                .accessibilityHint("Double-tap to rename this group")
+            } else {
+                groupHeaderLabel(group)
             }
+        }
+        .contextMenu {
+            groupContextMenu(group)
+        }
     }
 
+    private func groupHeaderLabel(_ group: CategoryGroup) -> some View {
+        SectionHeader(group.name, trailing: { AnyView(groupHeaderTrailing(group)) })
+            .padding(.top, theme.layout.spacing * 0.5)
+            .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func groupContextMenu(_ group: CategoryGroup) -> some View {
+        Button {
+            Haptics.tap()
+            categoryEditor = .rename(id: group.id, currentName: group.name, isGroup: true)
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        Button {
+            Task { await toggleHidden(group) }
+        } label: {
+            Label(group.hidden ? "Unhide" : "Hide",
+                  systemImage: group.hidden ? "eye" : "eye.slash")
+        }
+        Button(role: .destructive) {
+            Task { await deleteGroup(group) }
+        } label: {
+            Label(group.categories.isEmpty ? "Delete" : "Delete (move categories first)",
+                  systemImage: "trash")
+        }
+        .disabled(!group.categories.isEmpty)
+    }
+
+    /// Same story as the header: a tap renames while editing, and outside edit mode the row is
+    /// exactly what it was — a plain label with its context menu.
     private func categoryRow(_ category: Category, in group: CategoryGroup) -> some View {
+        Group {
+            if isEditing {
+                Button {
+                    Haptics.tap()
+                    categoryEditor = .rename(id: category.id,
+                                             currentName: category.name,
+                                             isGroup: false)
+                } label: {
+                    categoryRowLabel(category)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Double-tap to rename")
+            } else {
+                categoryRowLabel(category)
+            }
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(theme.palette.separator)
+        .listRowInsets(rowInsets)
+        .contextMenu {
+            categoryContextMenu(category, in: group)
+        }
+    }
+
+    private func categoryRowLabel(_ category: Category) -> some View {
         HStack(spacing: 6) {
             Text(category.name)
                 .font(theme.font(.body))
@@ -150,12 +224,55 @@ struct ManageCategoriesView: View {
         }
         .frame(minHeight: 44)
         .contentShape(Rectangle())
-        .listRowBackground(Color.clear)
-        .listRowSeparatorTint(theme.palette.separator)
-        .listRowInsets(rowInsets)
-        .contextMenu {
-            categoryContextMenu(category, in: group)
+    }
+
+    // MARK: Edit-mode add rows
+
+    /// Inline "Add category" at the bottom of each group while editing. Sits outside the `ForEach`
+    /// so it never joins the reorder set.
+    private func addCategoryRow(in group: CategoryGroup) -> some View {
+        Button {
+            Haptics.tap()
+            categoryEditor = .newCategory(groupID: group.id)
+        } label: {
+            editActionLabel("Add category", systemImage: "plus.circle")
         }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets)
+        .accessibilityLabel("Add a category to \(group.name)")
+    }
+
+    /// Tail of the list while editing: categories live inside groups, so this is where a new
+    /// group comes from.
+    private var newGroupRow: some View {
+        Button {
+            Haptics.tap()
+            categoryEditor = .newGroup(isIncome: false)
+        } label: {
+            editActionLabel("New group", systemImage: "folder.badge.plus")
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets)
+        .padding(.top, theme.layout.spacing)
+    }
+
+    private func editActionLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: theme.layout.spacing * 0.75) {
+            Image(systemName: systemImage)
+                .font(theme.font(.body))
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(theme.icons.fill ? .fill : .none)
+            Text(title)
+                .font(theme.font(.body))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(theme.palette.accent)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

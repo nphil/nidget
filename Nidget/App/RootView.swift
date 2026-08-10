@@ -139,18 +139,28 @@ private struct RootContentView: View {
     }
 
     // MARK: Quick Add floating button
+    //
+    // Top-level screens only. It belongs to the three tabs where adding a transaction is the
+    // obvious next thing, and only while they're showing their own root — pushing Manage
+    // Categories, an account, Reports or the Guide takes it away, and popping back brings it
+    // straight back. `isAtRoot(of:)` reads just the frontmost tab's path, so a push in a
+    // background tab doesn't touch this.
+
+    private var showsQuickAdd: Bool {
+        Self.quickAddTabs.contains(router.tab) && router.isAtRoot(of: router.tab)
+    }
 
     @ViewBuilder
     private var quickAddOverlay: some View {
         ZStack {
-            if Self.quickAddTabs.contains(router.tab) {
+            if showsQuickAdd {
                 QuickAddFloatingButton {
                     router.quickAddPresented = true
                 }
                 .transition(.scale(scale: 0.5).combined(with: .opacity))
             }
         }
-        .animation(reduceMotion ? nil : theme.motion.spring, value: router.tab)
+        .animation(reduceMotion ? nil : theme.motion.spring, value: showsQuickAdd)
         .padding(.trailing, theme.layout.spacing + 8)
         .padding(.bottom, 68)
     }

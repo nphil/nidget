@@ -126,6 +126,15 @@ Only deep-linked category/payee/month filters still show a clearable chip above 
   glow from the swiped-from edge (radial accent gradient, opacity 0 -> 0.35 -> 0, ~0.5s
   theme.motion.spring; skip entirely under Reduce Motion; Haptics.tick once). Communicates
   "everything already fits on one screen."
+- Superseded 2026-08-10: the radial pulse is replaced by kobold's edge glow — vertical only,
+  a 140pt accent band at the true top (pull down) or bottom (pull up) of the screen whose
+  opacity follows the finger live through UIKit's rubber-band resistance curve and eases back
+  to 0 on release (theme.motion.spring, or .linear(0.15) under Reduce Motion). It renders
+  under Reduce Motion too, since it answers a gesture rather than moving on its own, and it
+  no longer fires a haptic. The pressure lives in `DashboardPullState`, read only by
+  `DashboardEdgeGlow` (overlaid on the screen as a sibling of the grid), so a drag never
+  re-renders the widget grid; tiles report their drags through the `dashboardPull`
+  environment closure.
 
 ## Sequencing
 

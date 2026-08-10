@@ -51,6 +51,19 @@ final class AppRouter {
     /// `.task(id:)` and clears it after applying.
     var pendingTransactionFilter: TransactionQuery?
 
+    /// Whether `tab`'s stack is showing its root screen, i.e. nothing has been pushed on top.
+    /// RootView uses this to keep the floating Quick Add button on top-level screens only —
+    /// reading one tab's path at a time, so a push in a background tab changes nothing here.
+    func isAtRoot(of tab: AppTab) -> Bool {
+        switch tab {
+        case .dashboard: return dashboardPath.isEmpty
+        case .budget: return budgetPath.isEmpty
+        case .transactions: return transactionsPath.isEmpty
+        case .retire: return retirePath.isEmpty
+        case .settings: return settingsPath.isEmpty
+        }
+    }
+
     /// Appends to the CURRENT tab's path.
     func push(_ route: Route) {
         switch tab {

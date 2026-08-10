@@ -281,7 +281,6 @@ struct BudgetView: View {
                     }
                 }
             }
-            newGroupRow
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -302,35 +301,9 @@ struct BudgetView: View {
             .listRowInsets(rowInsets)
     }
 
-    /// Tail row of the budget list: create a whole new group (categories live inside groups, so
-    /// this is the other half of the "+" on each group header).
-    private var newGroupRow: some View {
-        Button {
-            Haptics.tap()
-            categoryEditor = .newGroup(isIncome: false)
-        } label: {
-            HStack(spacing: theme.layout.spacing * 0.75) {
-                Image(systemName: "folder.badge.plus")
-                    .font(theme.font(.body))
-                    .fontWeight(theme.icons.weight)
-                    .symbolVariant(theme.icons.fill ? .fill : .none)
-                Text("New Group")
-                    .font(theme.font(.body))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(theme.palette.accent)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets)
-        .padding(.top, theme.layout.spacing)
-    }
-
     /// Trailing "+" on every group header — the discoverable place to add a category, right where
-    /// that group's categories are listed.
+    /// that group's categories are listed. Whole groups are made in Manage Categories (the
+    /// toolbar's slider button), which keeps this list about the month's money.
     private func groupHeader(_ group: CategoryGroup) -> some View {
         SectionHeader(group.name, trailing: {
             AnyView(
