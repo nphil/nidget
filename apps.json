@@ -1,7 +1,7 @@
 {
   "name": "Nidget Repo",
   "subtitle": "Repository for the Nidget iOS app",
-  "description": "An unofficial AltStore/Feather compatible source for Nidget \u2014 a beautiful, offline-first iOS companion for your self-hosted Actual Budget server, with SimpleFIN import and retirement planning.",
+  "description": "An unofficial AltStore/Feather compatible source for Nidget \u2014 a beautiful, offline-first iOS companion for your self-hosted Actual Budget server, with on-device AI and retirement planning.",
   "iconURL": "https://raw.githubusercontent.com/nphil/nidget/main/Nidget/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
   "website": "https://github.com/nphil/nidget",
   "tintColor": "#6DC4E0",
@@ -11,7 +11,7 @@
       "bundleIdentifier": "com.nphil.nidget",
       "developerName": "Nitin",
       "subtitle": "Actual Budget companion",
-      "localizedDescription": "Native iOS companion for your self-hosted Actual Budget server. Offline-first CRDT sync, 40 hand-tuned themes, a customizable one-screen dashboard, 3-tap transaction capture, SimpleFIN bank import, and retirement planning with Monte Carlo projections.",
+      "localizedDescription": "Native iOS companion for your self-hosted Actual Budget server. Offline-first CRDT sync, 40 hand-tuned themes, a customizable one-screen dashboard, 3-tap transaction capture, on-device AI categorization, and retirement planning with Monte Carlo projections.",
       "iconURL": "https://raw.githubusercontent.com/nphil/nidget/main/Nidget/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "#6DC4E0",
       "category": "finance",

@@ -1,8 +1,9 @@
 # Nidget — Architecture & Contracts
 
 Nidget is a native iOS companion app for [Actual Budget](https://actualbudget.org). It speaks
-Actual's CRDT sync protocol directly (no JS bridge), imports bank data via SimpleFIN, works fully
-offline, and adds a retirement-planning module. This document is the **binding contract** for all
+Actual's CRDT sync protocol directly (no JS bridge), works fully offline, and adds a
+retirement-planning module. Bank imports happen server-side, through your Actual server's own
+bank sync. This document is the **binding contract** for all
 implementation work: exact type signatures, file ownership, and conventions. If code disagrees with
 this document, the code is wrong (or this document must be amended deliberately — never silently).
 
@@ -64,7 +65,6 @@ Nidget/
     Sync/ActualAPI.swift SyncEngine.swift ZipArchive.swift E2ECrypto.swift
     Store/AppStore.swift Mutations.swift BudgetCalculator.swift
     Store/Preferences.swift KeychainStore.swift
-    SimpleFIN/SimpleFINClient.swift TransactionImporter.swift
     Retirement/RetirementPlan.swift MonteCarlo.swift
   Features/
     Dashboard/  Budget/  Transactions/  Accounts/  Reports/  Retirement/  Settings/
@@ -81,7 +81,7 @@ declarations as immutable API.
 - `SyncEngine` is an `actor`. `BudgetDatabase` is a `final class` used from a single
   `DatabaseQueue` actor owned by AppStore — see §7. SQLite is opened with `SQLITE_OPEN_FULLMUTEX`.
 - Domain model structs are `Sendable`.
-- Errors: one enum per subsystem (`ActualAPIError`, `SyncError`, `DBError`, `SimpleFINError`),
+- Errors: one enum per subsystem (`ActualAPIError`, `SyncError`, `DBError`),
   all `LocalizedError` with human-readable `errorDescription`. UI surfaces errors as a themed
   toast/banner via `AppStore.lastError`, never `print`.
 - Logging: `import os`; `static let log = Logger(subsystem: "app.nidget", category: "<area>")`.
@@ -359,8 +359,8 @@ is opportunistic.
   func setBudgetAmount(month: BudgetMonth, categoryID: String, amount: Money) async
   func moveBudget(month: BudgetMonth, from: String?, to: String?, amount: Money) async // nil = To Budget
   func createPayee(name: String) async -> String           // returns new id
-  func syncNow() async
-  func importSimpleFIN() async -> ImportSummary?           // uses TransactionImporter
+  func syncNow() async                                     // auto-categorizes new bank arrivals after a
+                                                             // successful sync that changed transactions
 }
 struct TransactionDraft: Sendable { var accountID: String; var amount: Money; var date: BudgetDay
   var payeeID: String?; var newPayeeName: String?; var categoryID: String?; var notes: String?
@@ -390,34 +390,19 @@ flag; To Budget = available income − budgeted, cumulative).
 `Preferences.swift`: `@MainActor @Observable final class Preferences` (UserDefaults-backed):
 `dashboardLayoutJSON: String`, `currencyCode: String` (didSet must also update
 `CurrencyFormatter.currencyCode`), `biometricLock: Bool`, `privacyModeDefault: Bool`,
-`retirementConfigJSON: String`, `defaultAccountID: String?`, `simplefinAccountMapJSON: String`
-(SimpleFIN account id → Actual account id), plus `static let shared`.
+`retirementConfigJSON: String`, `defaultAccountID: String?`, plus `static let shared`.
 NOTE: theme selection is NOT here — `ThemeManager` (already written) owns its own persistence.
 
 `KeychainStore.swift`: `enum KeychainStore { static func set(_ value: String, key: String);
 static func get(_ key: String) -> String?; static func delete(_ key: String) }` — keys:
 `actual.serverURL`, `actual.password`, `actual.token`, `actual.fileID`, `actual.groupID`,
-`actual.e2ePassword`, `simplefin.accessURL`. kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly.
+`actual.e2ePassword`. kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly.
 
-## 10. SimpleFIN contracts
+## 10. SimpleFIN
 
-```swift
-actor SimpleFINClient {
-  static func claim(setupToken: String) async throws -> String        // access URL (store in Keychain)
-  init(accessURL: String)
-  func accounts(startDate: Date?, includePending: Bool) async throws -> [SFAccount]
-}
-struct SFAccount: Sendable { var id: String; var name: String; var org: String; var currency: String
-  var balance: Money; var balanceDate: Date; var transactions: [SFTransaction] }
-struct SFTransaction: Sendable { var id: String; var posted: Date; var amount: Money
-  var payee: String?; var description: String; var memo: String?; var pending: Bool }
-
-// TransactionImporter.swift — dedupe on transactions.financial_id (imported id), map SF account →
-// Actual account via Preferences JSON map `simplefinAccountMapJSON`; unmatched accounts surface in
-// ImportSummary.unmapped for the Settings mapping UI.
-struct ImportSummary: Sendable { var imported: Int; var skipped: Int; var pendingSkipped: Int
-  var unmapped: [SFAccount]; var perAccount: [(name: String, added: Int)] }
-```
+In-app SimpleFIN was removed 2026-08-10 — the Actual server's own bank sync is the import path
+now. The wire spec stays documented in `docs/PROTOCOL.md` §9 for a possible future standalone
+mode.
 
 ## 11. Retirement module (pure math + config)
 
@@ -532,9 +517,9 @@ NidgetButton primary full-width → `Haptics.success` + checkmark symbol-effect 
 Landscape of the whole flow must be possible thumb-only.
 
 **Accounts** (`AccountsView` pushed from dashboard/settings + `AccountDetailView`): net worth hero
-w/ Sparkline, sections For Budget / Off Budget / Closed (collapsed), rows: name, cleared balance,
-sync-source badge (SimpleFIN link icon if mapped). Detail: balance hero, running-balance toggle,
-filtered transaction list reusing components, reconcile affordance (marks cleared→reconciled).
+w/ Sparkline, sections For Budget / Off Budget / Closed (collapsed), rows: name, cleared balance.
+Detail: balance hero, running-balance toggle, filtered transaction list reusing components,
+reconcile affordance (marks cleared→reconciled).
 
 **Reports** (`ReportsView` pushed via router): segmented (Spending / Net Worth / Cash Flow /
 Sankey-less category trends). Swift Charts styled per `theme.chart` (bar corner radii, area
@@ -546,8 +531,7 @@ success probability stat, coast-FIRE callout, "what if" quick sliders (retire ag
 contribution, return) that live-update with `theme.motion.spring`, `AssumptionsSheet` for full
 `RetirementConfig` editing incl. linked-accounts multi-pick. All charts respect privacyMode.
 
-**Settings** (`SettingsView`): server card (status, budget name, sync now, disconnect), SimpleFIN
-card (claim token entry, account mapping list SF→Actual pickers, import now + last ImportSummary),
+**Settings** (`SettingsView`): server card (status, budget name, sync now, disconnect),
 Appearance (theme gallery link, appearance mode picker, app icon note), Dashboard (edit layout
 button → switches tab + enables edit), Security (FaceID toggle, privacy mode), Currency picker,
 About. `ThemeGalleryView`: 2-col grid of live miniature previews (mini dashboard mock rendered with
@@ -582,7 +566,7 @@ each theme's tokens), sectioned Light/Dark, tap = apply + `Haptics.success`; cur
 enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire, settings }
 enum Route: Hashable {
   case accounts, account(String), reports, transactionDetail(String),
-       themeGallery, simpleFINSetup, securitySettings, retirementAssumptions
+       themeGallery, securitySettings, retirementAssumptions
 }
 @MainActor @Observable final class AppRouter {
   var tab: AppTab = .dashboard
@@ -602,7 +586,7 @@ and applies `.withRouteDestinations()` — a modifier declared in AppRouter.swif
 `navigationDestination(for: Route.self)` maps: `.accounts → AccountsView()`,
 `.account(id) → AccountDetailView(accountID: id)`, `.reports → ReportsView()`,
 `.transactionDetail(id) → TransactionDetailView(transactionID: id)`,
-`.themeGallery → ThemeGalleryView()`, `.simpleFINSetup → SimpleFINSetupView()`,
+`.themeGallery → ThemeGalleryView()`,
 `.securitySettings → SecuritySettingsView()`, `.retirementAssumptions → AssumptionsSheet()`.
 Those view names + init signatures are therefore BINDING on their owning agents.
 `QuickAddView()` takes no arguments and is presented as a sheet by RootView.

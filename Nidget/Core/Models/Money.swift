@@ -12,7 +12,7 @@ struct Money: Hashable, Sendable, Comparable, AdditiveArithmetic, Codable {
 
     static let zero = Money(cents: 0)
 
-    /// Parse a decimal string like "-12.34" (SimpleFIN amounts, user input). Returns nil on junk.
+    /// Parse a decimal string like "-12.34" (user input). Returns nil on junk.
     init?(decimalString: String) {
         let trimmed = decimalString.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let decimal = Decimal(string: trimmed, locale: Locale(identifier: "en_US_POSIX")) else {

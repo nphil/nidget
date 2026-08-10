@@ -3,12 +3,12 @@ import SwiftUI
 // MARK: - SettingsView
 //
 // The Settings tab root (ARCHITECTURE §14/§16): a custom themed layout of cards — never a plain
-// Form — covering the server connection, SimpleFIN linking, Intelligence (on-device AI), Appearance
+// Form — covering the server connection, Intelligence (on-device AI), Appearance
 // (with the theme gallery entry point), Dashboard editing, Security, Preferences, and About. Every
 // card reads its state live from `AppStore`/`Preferences`/`ThemeManager`/`KeychainStore` on every
-// body evaluation (no locally mirrored copies), so returning from a pushed screen (SimpleFIN
-// mapping, theme gallery, security settings, Intelligence) always reflects the latest state
-// without a manual refresh hook — SwiftUI re-invokes `body` whenever `router.settingsPath` changes
+// body evaluation (no locally mirrored copies), so returning from a pushed screen (theme gallery,
+// security settings, Intelligence) always reflects the latest state without a manual refresh
+// hook — SwiftUI re-invokes `body` whenever `router.settingsPath` changes
 // (it's read via the `NavigationStack` binding), which covers every push/pop through this tab.
 // The Intelligence card additionally reads `AIModelManager`/`ModelDownloadManager` — singletons
 // not in ARCHITECTURE §16's environment-injection list, so they're read directly via `.shared`,
@@ -30,8 +30,6 @@ struct SettingsView: View {
 
     @State private var showDisconnectConfirm = false
     @State private var showCurrencyPicker = false
-    @State private var isImporting = false
-    @State private var lastImportSummary: ImportSummary?
 
     init() {}
 
@@ -49,7 +47,6 @@ struct SettingsView: View {
         ScrollView {
             VStack(spacing: theme.layout.cardSpacing) {
                 serverCard
-                simpleFINCard
                 intelligenceCard
                 guideCard
                 appearanceCard
@@ -191,87 +188,6 @@ struct SettingsView: View {
                 .padding(.leading, 16)
                 .opacity(isSyncing ? 1 : 0)
                 .allowsHitTesting(false)
-        }
-    }
-
-    // MARK: - SimpleFIN card
-
-    private var simpleFINAccessURL: String? { KeychainStore.get("simplefin.accessURL") }
-    private var isSimpleFINLinked: Bool { simpleFINAccessURL != nil }
-
-    private var simpleFINCard: some View {
-        SettingsCard(title: "SimpleFIN", systemImage: "building.columns") {
-            if isSimpleFINLinked {
-                infoRow("Mapped Accounts", value: "\(preferences.simplefinAccountMap.count)")
-                NidgetButton(isImporting ? "Importing…" : "Import Now",
-                            systemImage: "arrow.down.circle", role: .secondary) {
-                    importNow()
-                }
-                .disabled(isImporting)
-                importSummaryLine
-                separator
-                navRow("Manage Mapping", systemImage: "arrow.left.arrow.right") {
-                    router.push(.simpleFINSetup)
-                }
-            } else {
-                Text("Automatically import transactions from your linked bank accounts via SimpleFIN.")
-                    .font(theme.font(.caption))
-                    .foregroundStyle(theme.palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                NidgetButton("Connect SimpleFIN", systemImage: "link", role: .primary) {
-                    router.push(.simpleFINSetup)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var importSummaryLine: some View {
-        if let summary = lastImportSummary {
-            HStack(spacing: theme.layout.spacing * 0.75) {
-                summaryChip(systemImage: "arrow.down.circle", count: summary.imported, color: theme.palette.positive)
-                summaryChip(systemImage: "checkmark.circle", count: summary.skipped, color: theme.palette.textTertiary)
-                if summary.autoCategorized > 0 {
-                    summaryChip(systemImage: "sparkles", count: summary.autoCategorized, color: theme.palette.accent)
-                }
-                if !summary.unmapped.isEmpty {
-                    summaryChip(systemImage: "exclamationmark.triangle",
-                               count: summary.unmapped.count, color: theme.palette.warning)
-                }
-                Spacer(minLength: 0)
-            }
-            .transition(.opacity)
-        }
-    }
-
-    private func summaryChip(systemImage: String, count: Int, color: Color) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: systemImage)
-                .font(theme.font(.caption))
-                .fontWeight(theme.icons.weight)
-                .foregroundStyle(color)
-            Text("\(count)")
-                .font(theme.font(.caption))
-                .foregroundStyle(theme.palette.textSecondary)
-                .contentTransition(.numericText())
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func importNow() {
-        guard !isImporting else { return }
-        isImporting = true
-        Task {
-            let summary = await store.importSimpleFIN()
-            isImporting = false
-            if let summary {
-                if reduceMotion {
-                    lastImportSummary = summary
-                } else {
-                    withAnimation(theme.motion.spring) { lastImportSummary = summary }
-                }
-                Haptics.success()
-            }
         }
     }
 
@@ -473,22 +389,6 @@ struct SettingsView: View {
             .font(theme.font(.caption))
             .fontWeight(theme.icons.weight)
             .foregroundStyle(theme.palette.textTertiary)
-    }
-
-    private func infoRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(theme.font(.subheadline))
-                .foregroundStyle(theme.palette.textSecondary)
-            Spacer(minLength: theme.layout.spacing)
-            Text(value)
-                .font(theme.font(.subheadline))
-                .foregroundStyle(theme.palette.textPrimary)
-                .lineLimit(1)
-                .contentTransition(.numericText())
-                .animation(reduceMotion ? nil : theme.motion.snappy, value: value)
-        }
-        .frame(minHeight: 32)
     }
 
     private func navRow(_ label: String, systemImage: String, detail: String? = nil,

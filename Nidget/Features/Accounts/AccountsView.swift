@@ -214,19 +214,10 @@ struct AccountsView: View {
 
     private func accountRow(_ account: Account) -> some View {
         HStack(spacing: theme.layout.spacing * 0.75) {
-            HStack(spacing: 6) {
-                Text(account.name)
-                    .font(theme.font(.body))
-                    .foregroundStyle(theme.palette.textPrimary)
-                    .lineLimit(1)
-                if account.simpleFINID != nil {
-                    Image(systemName: "link")
-                        .font(theme.font(.caption))
-                        .fontWeight(theme.icons.weight)
-                        .foregroundStyle(theme.palette.accent)
-                        .accessibilityLabel("Linked to SimpleFIN")
-                }
-            }
+            Text(account.name)
+                .font(theme.font(.body))
+                .foregroundStyle(theme.palette.textPrimary)
+                .lineLimit(1)
             Spacer(minLength: theme.layout.spacing * 0.5)
             AmountText(account.balance, style: .body)
         }

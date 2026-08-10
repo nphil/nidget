@@ -98,10 +98,14 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
      a compact prompt — category names list + transaction text + top-3 kNN candidates — asking for
      exactly one category name; match the reply back to a category id (case-insensitive; reject
      hallucinated names, keep kNN answer on mismatch).
-- Auto-categorize on SimpleFIN import (Preferences toggle `aiAutoCategorize`, default OFF):
-  in `importSimpleFIN`, after building the plan, run suggestions for uncategorized drafts and
-  apply only when confidence ≥ 0.75; count applied in ImportSummary line (extend the summary text,
-  not the struct's stored properties, unless trivial).
+- Auto-categorize newly synced bank transactions (Preferences toggle `aiAutoCategorize`, default
+  OFF): after a sync completes and changed the `transactions` dataset, `AppStore` looks at bank-
+  imported transactions from the last 45 days that are still uncategorized (`importedID != nil`,
+  not a transfer, not a split parent), runs `CategorySuggestionService.suggest(...)` on up to 50
+  of them per run, and applies only picks with confidence ≥ 0.75 as one batched write. Ids already
+  tried this session are skipped on later syncs. Works no matter who imported the transactions —
+  the app no longer imports bank data itself, so this only ever sees rows the Actual server's own
+  bank sync delivered.
 
 ### Semantic search (hybrid)
 

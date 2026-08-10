@@ -13,7 +13,7 @@ taps.
 - **A one-screen dashboard** you compose yourself: pick widgets, drag to rearrange, resize —
   everything fits without scrolling.
 - **3-tap transaction capture** with payee/category learning, from any tab, plus Siri/Shortcuts.
-- **SimpleFIN bank import** with dedupe and account mapping.
+- **Bank imports arrive via your Actual server's bank sync** — nothing to set up in the app.
 - **On-device AI (llama.cpp)**: categorization suggestions and semantic search with models you
   download from Hugging Face — nothing leaves the phone.
 - **Retirement planning**: FI number, Monte Carlo projection bands, success probability,
@@ -26,7 +26,6 @@ taps.
 - Xcode 26 or later, iOS 26.0+ device or simulator
 - An Actual server (`actual-server` / sync server) reachable from your phone — a Tailscale tailnet
   works great
-- Optional: a [SimpleFIN Bridge](https://beta-bridge.simplefin.org) setup token for bank import
 
 ## Installation
 
@@ -88,17 +87,13 @@ Release builds ship with `VALIDATE_PRODUCT=NO` and `CADisableMinimumFrameDuratio
 2. **Pick your budget file.** If the file is end-to-end encrypted, you'll be asked for the
    encryption password too.
 3. Nidget downloads the budget file and syncs. Everything after that works offline; changes queue
-   and sync when the server is reachable.
-
-### SimpleFIN
-
-Settings → SimpleFIN → paste your setup token (one-time claim). Map each SimpleFIN account to an
-Actual account, then import — transactions dedupe on the bank's transaction id.
+   and sync when the server is reachable. Bank imports set up on your Actual server (its own bank
+   sync) show up automatically — there's nothing to connect inside the app.
 
 ## Security notes
 
-- The Actual password, session token, SimpleFIN access URL, and E2E password are stored in the iOS
-  Keychain (`AfterFirstUnlockThisDeviceOnly`), never in UserDefaults or files.
+- The Actual password, session token, and E2E password are stored in the iOS Keychain
+  (`AfterFirstUnlockThisDeviceOnly`), never in UserDefaults or files.
 - `Support/Info.plist` relaxes App Transport Security because Actual servers on a tailnet are
   commonly plain HTTP — the transport is already end-to-end encrypted by Tailscale (WireGuard). If
   you serve HTTPS (e.g. `tailscale serve`), you can remove `NSAllowsArbitraryLoads`.

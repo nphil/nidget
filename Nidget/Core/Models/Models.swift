@@ -13,8 +13,6 @@ struct Account: Identifiable, Hashable, Sendable {
     var sortOrder: Double
     /// Populated by AppStore from `BudgetDatabase.accountBalances()`.
     var balance: Money = .zero
-    /// Non-nil when this account is mapped to a SimpleFIN account (Preferences map).
-    var simpleFINID: String? = nil
 }
 
 struct Payee: Identifiable, Hashable, Sendable {

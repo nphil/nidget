@@ -10,7 +10,7 @@ import os
 // unlock, never migrated to a new device via backup).
 //
 // Keys used by AppStore: `actual.serverURL`, `actual.password`, `actual.token`,
-// `actual.fileID`, `actual.groupID`, `actual.e2ePassword`, `simplefin.accessURL`.
+// `actual.fileID`, `actual.groupID`, `actual.e2ePassword`.
 //
 // Values are secrets — they are NEVER logged; only OSStatus codes are.
 

@@ -178,8 +178,14 @@ final class AppStore {
     private var categoryNameByID: [String: String] = [:]
     /// Debounce handle for the background embedding reindex (docs/AI.md §3).
     private var reindexDebounceTask: Task<Void, Never>?
+    /// Guards `autoCategorizeNewArrivals()` against overlapping runs (docs/AI.md §3).
+    private var isAutoCategorizing = false
+    /// Transaction ids already tried by `autoCategorizeNewArrivals()` this session, so a
+    /// low-confidence pick isn't re-embedded on every sync.
+    private var autoCategorizeAttemptedIDs: Set<String> = []
 
     private static let log = Logger(subsystem: "app.nidget", category: "store")
+    private static let aiLog = Logger(subsystem: "app.nidget", category: "ai")
 
     private enum KeychainKey {
         static let serverURL = "actual.serverURL"
@@ -188,7 +194,6 @@ final class AppStore {
         static let fileID = "actual.fileID"
         static let groupID = "actual.groupID"
         static let e2ePassword = "actual.e2ePassword"
-        static let simplefinAccessURL = "simplefin.accessURL"
     }
 
     private enum DefaultsKey {
@@ -424,10 +429,10 @@ final class AppStore {
         reindexDebounceTask = nil
         await EmbeddingIndex.shared.deleteDatabaseFile()
         CategorySuggestionService.shared.reset()
+        autoCategorizeAttemptedIDs.removeAll()
 
         for key in [KeychainKey.serverURL, KeychainKey.password, KeychainKey.token,
-                    KeychainKey.fileID, KeychainKey.groupID, KeychainKey.e2ePassword,
-                    KeychainKey.simplefinAccessURL] {
+                    KeychainKey.fileID, KeychainKey.groupID, KeychainKey.e2ePassword] {
             KeychainStore.delete(key)
         }
         let defaults = UserDefaults.standard
@@ -460,9 +465,9 @@ final class AppStore {
         var payeeNames: [String: String]
     }
 
-    /// Reloads all published data from the budget file: accounts (with balances + SimpleFIN
-    /// mapping from Preferences), category groups, payees, the month snapshot, and re-asserts
-    /// the currency code. Called after bootstrap, sync, and every mutation.
+    /// Reloads all published data from the budget file: accounts (with balances), category
+    /// groups, payees, the month snapshot, and re-asserts the currency code. Called after
+    /// bootstrap, sync, and every mutation.
     func refreshAll() async {
         guard let dbQueue else { return }
         CurrencyFormatter.currencyCode = Preferences.shared.currencyCode
@@ -475,14 +480,9 @@ final class AppStore {
                             payeeNames: try db.payeeNames())
             }
 
-            var simpleFINByActualID: [String: String] = [:]
-            for (sfID, actualID) in Preferences.shared.simplefinAccountMap {
-                simpleFINByActualID[actualID] = sfID
-            }
             var accounts = data.accounts
             for index in accounts.indices {
                 accounts[index].balance = data.balances[accounts[index].id] ?? .zero
-                accounts[index].simpleFINID = simpleFINByActualID[accounts[index].id]
             }
 
             var categoryNames: [String: String] = [:]
@@ -1026,11 +1026,20 @@ final class AppStore {
         if case .syncing = syncStatus { return }
         syncStatus = .syncing
         do {
-            _ = try await engine.fullSync()
+            let outcome = try await engine.fullSync()
             let now = Date()
             UserDefaults.standard.set(now, forKey: DefaultsKey.lastSync)
             syncStatus = .idle(lastSync: now)
             await refreshAll()
+            // Trigger point for docs/AI.md §3's auto-categorize pass: a sync that actually
+            // brought in transaction changes is the one signal that's true "no matter who
+            // imported them" — bank imports now happen server-side, so this is the only hook
+            // left. `isAutoCategorizing` (checked inside) stops overlapping runs: syncStatus is
+            // already back to `.idle` by the time this call starts, so a second `syncNow()`
+            // could otherwise slip in and fire a concurrent pass while this one is still going.
+            if outcome.changedDatasets.contains("transactions") {
+                await autoCategorizeNewArrivals()
+            }
         } catch {
             let pending = await pendingCount()
             if Self.isOffline(error) {
@@ -1071,126 +1080,68 @@ final class AppStore {
         return false
     }
 
-    // MARK: - SimpleFIN import
+    // MARK: - Auto-categorize new arrivals (docs/AI.md §3)
 
-    /// Fetches the last 60 days from SimpleFIN (posted only — no pending), plans the import
-    /// against the account map + existing `financial_id`s, then inserts everything (new payees
-    /// included) as ONE enqueued CRDT batch. Returns the summary for Settings, nil on failure
-    /// (with `lastError` set).
-    func importSimpleFIN() async -> ImportSummary? {
-        guard let engine, let dbQueue else {
-            lastError = AppError(message: "Couldn't import from SimpleFIN",
-                                 detail: "No budget file is open.")
-            return nil
-        }
-        guard let accessURL = KeychainStore.get(KeychainKey.simplefinAccessURL) else {
-            lastError = AppError(message: "SimpleFIN isn't connected",
-                                 detail: "Add your SimpleFIN setup token in Settings first.")
-            return nil
-        }
-        do {
-            let client = SimpleFINClient(accessURL: accessURL)
-            let startDate = Calendar.current.date(byAdding: .day, value: -60, to: Date())
-                ?? Date(timeIntervalSinceNow: -60 * 24 * 60 * 60)
-            let sfAccounts = try await client.accounts(startDate: startDate, includePending: false)
-
-            let accountMap = Preferences.shared.simplefinAccountMap
-            var existingIDs: [String: Set<String>] = [:]
-            for actualID in Set(sfAccounts.compactMap({ accountMap[$0.id] })) {
-                existingIDs[actualID] = (try? await dbQueue.read({ db -> Set<String> in
-                    try db.existingImportedIDs(accountID: actualID)
-                })) ?? []
-            }
-
-            let plan = TransactionImporter().plan(sfAccounts: sfAccounts,
-                                                  accountMap: accountMap,
-                                                  existingImportedIDs: existingIDs,
-                                                  includePending: false,
-                                                  defaultCleared: true)
-
-            // Optional on-device auto-categorize pass (docs/AI.md §3): only high-confidence
-            // picks are applied, and only when the toggle is on and a model is ready.
-            let (plannedDrafts, autoCategorized) = await autoCategorizedDrafts(plan.drafts)
-            var summary = plan.summary
-            summary.autoCategorized = autoCategorized
-
-            var writes: [Mutations.CellWrite] = []
-            var payeeIDByLoweredName: [String: String] = [:]
-            for payee in payees where payee.transferAccountID == nil {
-                payeeIDByLoweredName[payee.name.lowercased()] = payee.id
-            }
-            for planned in plannedDrafts {
-                var draft = planned.draft
-                let bankPayee = draft.newPayeeName
-                if draft.payeeID == nil, let name = bankPayee, !name.isEmpty {
-                    let key = name.lowercased()
-                    if let existing = payeeIDByLoweredName[key] {
-                        draft.payeeID = existing
-                    } else {
-                        let id = Mutations.newID()
-                        writes += Mutations.createPayee(id: id, name: name)
-                        payeeIDByLoweredName[key] = id
-                        draft.payeeID = id
-                    }
-                }
-                writes += Mutations.addTransaction(draft: draft,
-                                                   importedID: planned.importedID,
-                                                   importedPayee: bankPayee)
-            }
-
-            if !writes.isEmpty {
-                let timestamps = try await engine.nextTimestamps(count: writes.count)
-                guard await engine.enqueue(Mutations.messages(writes, timestamps: timestamps)) else {
-                    lastError = AppError(message: "SimpleFIN import failed",
-                                         detail: "The imported transactions couldn't be written to the budget file.")
-                    return nil
-                }
-                await refreshAll()
-            }
-            Self.log.info("SimpleFIN import: \(summary.imported) new, \(summary.skipped) duplicate(s), \(summary.autoCategorized) auto-categorized, \(summary.unmapped.count) unmapped account(s)")
-            return summary
-        } catch {
-            lastError = AppError(message: "SimpleFIN import failed",
-                                 detail: Self.friendlyMessage(for: error, fallback: "Unknown error."))
-            return nil
-        }
-    }
-
-    /// Runs the on-device category suggester over uncategorized import drafts, applying only
-    /// picks with confidence ≥ 0.75 (docs/AI.md §3). Returns the updated drafts plus how many
-    /// were categorized. Instant no-op when the `aiAutoCategorize` toggle is off or no
-    /// embedding model is ready, so the import flow is unchanged without AI.
-    private func autoCategorizedDrafts(_ drafts: [PlannedImport]) async -> ([PlannedImport], Int) {
+    /// Suggests categories for freshly synced bank transactions, no matter which client did the
+    /// importing — bank imports happen server-side now (Actual's own bank sync), so a completed
+    /// sync that changed `transactions` is the only signal AppStore has that new rows might need
+    /// a category. Candidates: transactions from the last 45 days that are bank-imported
+    /// (`importedID != nil`), not yet categorized, not a transfer, and not a split parent —
+    /// `TransactionQuery(onlyUncategorized: true)` already excludes transfers, split parents, and
+    /// off-budget accounts, so only the import/date/session filters happen here. Capped at 50
+    /// candidates per run; each is tried at most once per app session
+    /// (`autoCategorizeAttemptedIDs`) so a low-confidence transaction isn't re-embedded on every
+    /// sync. Only picks with confidence ≥ 0.75 are applied, as one batched write, mirroring
+    /// `deleteCategory`'s batching. Silent: no `lastError`, no toast — this is a background
+    /// convenience, not a user-initiated action.
+    private func autoCategorizeNewArrivals() async {
         guard Preferences.shared.aiAutoCategorize,
               CategorySuggestionService.shared.embeddingReady,
-              !drafts.isEmpty else {
-            return (drafts, 0)
-        }
-        var drafts = drafts
-        var applied = 0
-        // A bank batch often repeats the same payee — suggest once per distinct text.
-        var suggestionByText: [String: CategorySuggestion?] = [:]
-        for index in drafts.indices where drafts[index].draft.categoryID == nil {
-            let draft = drafts[index].draft
-            let payee = draft.newPayeeName ?? ""
-            let text = EmbeddingIndex.embeddedText(payee: payee, notes: draft.notes)
-            guard !text.isEmpty else { continue }
-            let suggestion: CategorySuggestion?
-            if let cached = suggestionByText[text] {
-                suggestion = cached
-            } else {
-                suggestion = await CategorySuggestionService.shared
-                    .suggest(payee: payee, notes: draft.notes, limit: 1).first
-                suggestionByText[text] = suggestion
+              !isAutoCategorizing,
+              let dbQueue, let engine else { return }
+        isAutoCategorizing = true
+        defer { isAutoCategorizing = false }
+
+        let cutoff = BudgetDay.today.addingDays(-45)
+        let months = cutoff.month...BudgetMonth.current
+        let pageSize = 200
+        var candidates: [Transaction] = []
+        var offset = 0
+        while candidates.count < 50 {
+            let page = (try? await dbQueue.read({ db -> [Transaction] in
+                try db.transactions(TransactionQuery(months: months, onlyUncategorized: true,
+                                                     limit: pageSize, offset: offset))
+            })) ?? []
+            guard !page.isEmpty else { break }
+            for transaction in page where transaction.date >= cutoff
+                && transaction.importedID != nil
+                && !autoCategorizeAttemptedIDs.contains(transaction.id) {
+                candidates.append(transaction)
+                if candidates.count >= 50 { break }
             }
+            offset += page.count
+            if page.count < pageSize { break }
+        }
+        guard !candidates.isEmpty else { return }
+
+        var writes: [Mutations.CellWrite] = []
+        var applied = 0
+        for transaction in candidates {
+            autoCategorizeAttemptedIDs.insert(transaction.id)
+            let suggestion = await CategorySuggestionService.shared
+                .suggest(payee: payeeName(transaction.payeeID), notes: transaction.notes, limit: 1)
+                .first
             guard let suggestion, suggestion.confidence >= 0.75 else { continue }
-            drafts[index].draft.categoryID = suggestion.categoryID
+            writes += Mutations.updateFields(dataset: "transactions", id: transaction.id,
+                                             fields: [(column: "category", value: .string(suggestion.categoryID))])
             applied += 1
         }
-        if applied > 0 {
-            Self.log.info("Auto-categorized \(applied) imported transaction(s)")
-        }
-        return (drafts, applied)
+        guard !writes.isEmpty else { return }
+        guard let timestamps = try? await engine.nextTimestamps(count: writes.count),
+              timestamps.count == writes.count,
+              await engine.enqueue(Mutations.messages(writes, timestamps: timestamps)) else { return }
+        await refreshAll()
+        Self.aiLog.info("Auto-categorized \(applied) newly synced transaction(s)")
     }
 
     // MARK: - Semantic index upkeep (docs/AI.md §3)

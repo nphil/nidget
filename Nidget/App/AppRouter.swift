@@ -20,7 +20,6 @@ enum Route: Hashable {
     case reports
     case transactionDetail(String)
     case themeGallery
-    case simpleFINSetup
     case securitySettings
     case retirementAssumptions
     case manageCategories
@@ -97,8 +96,6 @@ private struct RouteDestinationsModifier: ViewModifier {
                 TransactionDetailView(transactionID: id)
             case .themeGallery:
                 ThemeGalleryView()
-            case .simpleFINSetup:
-                SimpleFINSetupView()
             case .securitySettings:
                 SecuritySettingsView()
             case .retirementAssumptions:

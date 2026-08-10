@@ -159,7 +159,7 @@ struct SecuritySettingsView: View {
 
     private var footnotes: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.5) {
-            Text("Your server address, password, and SimpleFIN connection are stored in this device's Keychain, encrypted and inaccessible until after your first unlock each restart.")
+            Text("Your server address and password are stored in this device's Keychain, encrypted and inaccessible until after your first unlock each restart.")
             Text("Nidget talks to your Actual server directly — commonly over Tailscale or another private network you control — with no relay or third party in between.")
         }
         .font(theme.font(.caption))

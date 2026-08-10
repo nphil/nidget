@@ -134,7 +134,7 @@ build-breaker; re-check call sites whenever a reusable view's stored-property or
 
 **Wrap non-Sendable framework objects in a tiny `@unchecked Sendable` box before crossing an actor
 boundary**, rather than fighting the type system per call site (Stashy did this for
-`URLSessionTask`/`AVAssetWriterInput`). If Nidget's SimpleFIN/Actual networking or zip/crypto layer
+`URLSessionTask`/`AVAssetWriterInput`). If Nidget's Actual networking or zip/crypto layer
 hands a non-Sendable completion payload into a `@Sendable` closure, this is the lowest-friction fix.
 
 **`NotificationCenter.addObserver(..., queue: .main, using:)`'s block is `@Sendable`**; to call a

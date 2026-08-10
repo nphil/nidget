@@ -128,10 +128,10 @@ struct IntelligenceView: View {
                      message: "Suggests a category while you're adding a new payee.",
                      isOn: quickAddBinding)
             separator
-            toggleRow(icon: "tag", title: "Auto-Categorize Imports",
-                     message: "Applies a category automatically while importing from SimpleFIN.",
+            toggleRow(icon: "tag", title: "Auto-Categorize",
+                     message: "Applies a category automatically when new bank transactions sync in.",
                      isOn: autoCategorizeBinding)
-            Text("Only applied when Nidget is at least 75% confident. Anything less shows up as a suggestion instead.")
+            Text("When new bank transactions arrive from your server, Nidget files the ones it is at least 75 percent sure about. The rest stay uncategorized for you.")
                 .font(theme.font(.caption))
                 .foregroundStyle(theme.palette.textTertiary)
         }

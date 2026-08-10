@@ -3,8 +3,8 @@ import SwiftUI
 // MARK: - AccountDetailView
 //
 // Pushed via `Route.account(id)` (ARCHITECTURE §14/§16) — no NavigationStack of its own. Balance
-// hero (total + cleared/uncleared breakdown chips + a SimpleFIN badge when linked), then this
-// account's transactions paged 100-at-a-time exactly like TransactionsView (LESSONS_FROM_STASHY
+// hero (total + cleared/uncleared breakdown chips), then this account's transactions paged
+// 100-at-a-time exactly like TransactionsView (LESSONS_FROM_STASHY
 // §1: generation-token reload, `.task(id:)` cancellation guards, a per-id optimistic-edit
 // sequence token for the cleared toggle). The row is a private `AccountTransactionRow` that
 // mirrors TransactionRow's visual language through shared DesignSystem components only — it does
@@ -132,9 +132,6 @@ struct AccountDetailView: View {
             HStack(alignment: .firstTextBaseline) {
                 SectionHeader(account.offBudget ? "Off Budget" : "For Budget")
                 Spacer(minLength: theme.layout.spacing)
-                if account.simpleFINID != nil {
-                    simpleFINBadge
-                }
             }
             AmountText(account.balance, style: .display, colorized: false)
             HStack(spacing: theme.layout.spacing * 0.6) {
@@ -146,19 +143,6 @@ struct AccountDetailView: View {
         .padding(.horizontal, theme.layout.cardPadding)
         .padding(.top, theme.layout.spacing * 0.5)
         .animation(reduceMotion ? nil : theme.motion.spring, value: account.balance)
-    }
-
-    private var simpleFINBadge: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "link")
-                .fontWeight(theme.icons.weight)
-            Text("SimpleFIN")
-        }
-        .font(theme.font(.caption))
-        .foregroundStyle(theme.palette.accent)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(theme.palette.accent.opacity(0.14)))
     }
 
     private func breakdownChip(title: String, amount: Money, systemImage: String) -> some View {

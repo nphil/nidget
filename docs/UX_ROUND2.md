@@ -29,9 +29,9 @@ widget tile. Highlight the actual control being described (accent ring + glow ar
    transaction means your bank confirmed it (cleared); the lock means reconciled. Visual:
    keypad mini + a transaction row with callouts on the checkmark.
 4. **Accounts and sync.** On-budget accounts feed your envelopes; off-budget (investments)
-   just track worth. SimpleFIN pulls bank transactions in; everything works offline and
-   syncs to your Actual server when reachable (the little pill up top). Visual: two account
-   cards + sync pill states.
+   just track worth. Bank imports set up on your Actual server show up here automatically;
+   everything works offline and syncs to your Actual server when reachable (the little pill
+   up top). Visual: two account cards + sync pill states.
 5. **Your dashboard.** Press and hold any tile to rearrange, resize, or swap widgets.
    Tap a tile to jump to that part of the app. Visual: mini 2x2 grid with one jiggling tile.
 6. **Retirement.** Link your investment accounts and Nidget projects when work becomes

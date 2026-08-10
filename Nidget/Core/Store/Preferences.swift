@@ -22,7 +22,6 @@ final class Preferences {
         static let hasSeenGuide = "nidget.pref.hasSeenGuide"
         static let retirementConfigJSON = "nidget.pref.retirementConfigJSON"
         static let defaultAccountID = "nidget.pref.defaultAccountID"
-        static let simplefinAccountMapJSON = "nidget.pref.simplefinAccountMapJSON"
         static let aiCustomModelsJSON = "nidget.pref.aiCustomModelsJSON"
         static let aiEmbeddingModelID = "nidget.pref.aiEmbeddingModelID"
         static let aiGenerationModelID = "nidget.pref.aiGenerationModelID"
@@ -77,11 +76,6 @@ final class Preferences {
         }
     }
 
-    /// JSON object mapping SimpleFIN account id → Actual account id ("{}" when nothing mapped).
-    var simplefinAccountMapJSON: String {
-        didSet { UserDefaults.standard.set(simplefinAccountMapJSON, forKey: Key.simplefinAccountMapJSON) }
-    }
-
     /// Serialized `[ModelSpec]` — user-added GGUF models (AI). Empty string = none.
     var aiCustomModelsJSON: String {
         didSet { UserDefaults.standard.set(aiCustomModelsJSON, forKey: Key.aiCustomModelsJSON) }
@@ -129,7 +123,7 @@ final class Preferences {
         didSet { UserDefaults.standard.set(aiQuickAddSuggestions, forKey: Key.aiQuickAddSuggestions) }
     }
 
-    /// Auto-apply high-confidence category suggestions during SimpleFIN import.
+    /// Auto-apply high-confidence category suggestions to newly synced bank transactions.
     var aiAutoCategorize: Bool {
         didSet { UserDefaults.standard.set(aiAutoCategorize, forKey: Key.aiAutoCategorize) }
     }
@@ -144,7 +138,6 @@ final class Preferences {
         hasSeenGuide = defaults.bool(forKey: Key.hasSeenGuide)
         retirementConfigJSON = defaults.string(forKey: Key.retirementConfigJSON) ?? ""
         defaultAccountID = defaults.string(forKey: Key.defaultAccountID)
-        simplefinAccountMapJSON = defaults.string(forKey: Key.simplefinAccountMapJSON) ?? "{}"
         aiCustomModelsJSON = defaults.string(forKey: Key.aiCustomModelsJSON) ?? ""
         aiEmbeddingModelID = defaults.string(forKey: Key.aiEmbeddingModelID)
         aiGenerationModelID = defaults.string(forKey: Key.aiGenerationModelID)
@@ -155,27 +148,5 @@ final class Preferences {
         aiAutoCategorize = defaults.bool(forKey: Key.aiAutoCategorize)
         // didSet does not run during init — push the loaded value explicitly.
         CurrencyFormatter.currencyCode = currencyCode
-    }
-
-    // MARK: Convenience
-
-    /// Decoded view of `simplefinAccountMapJSON` (SimpleFIN account id → Actual account id).
-    /// Setting re-serializes deterministically (sorted keys) and persists via the JSON property.
-    var simplefinAccountMap: [String: String] {
-        get {
-            guard let data = simplefinAccountMapJSON.data(using: .utf8),
-                  let map = try? JSONDecoder().decode([String: String].self, from: data) else {
-                return [:]
-            }
-            return map
-        }
-        set {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            if let data = try? encoder.encode(newValue),
-               let json = String(data: data, encoding: .utf8) {
-                simplefinAccountMapJSON = json
-            }
-        }
     }
 }

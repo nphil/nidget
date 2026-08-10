@@ -327,7 +327,7 @@ struct GuideAccountsPage: View {
     var body: some View {
         GuidePage(
             title: "Accounts and sync",
-            text: "On-budget accounts feed your envelopes. Off-budget accounts, like investments, just track what you own. SimpleFIN can pull bank transactions in for you. Everything works offline and syncs to your server when it can, and the little pill up top keeps you posted."
+            text: "On-budget accounts feed your envelopes. Off-budget accounts, like investments, just track what you own. Bank imports you set up on your Actual server show up here automatically. Everything works offline and syncs to your server when it can, and the little pill up top keeps you posted."
         ) {
             VStack(spacing: theme.layout.spacing) {
                 HStack(spacing: theme.layout.spacing * 0.75) {
