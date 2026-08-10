@@ -33,6 +33,9 @@ struct QuickAddView: View {
     @State private var showDatePicker = false
     @State private var isSaving = false
     @State private var showSaved = false
+    /// Bumped when the saved checkmark appears so its discrete bounce actually fires — a
+    /// value keyed to `showSaved` never changes *after* insertion, so it would never animate.
+    @State private var savedBounce = 0
 
     init() {}
 
@@ -399,8 +402,12 @@ struct QuickAddView: View {
                         .fontWeight(theme.icons.weight)
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(theme.palette.positive)
-                        .symbolEffect(.bounce, options: .nonRepeating,
-                                      value: reduceMotion ? false : showSaved)
+                        .symbolEffect(.bounce, options: .nonRepeating, value: savedBounce)
+                        .onAppear {
+                            if !reduceMotion {
+                                savedBounce += 1
+                            }
+                        }
                     Text("Saved")
                         .font(theme.font(.title))
                         .foregroundStyle(theme.palette.textPrimary)

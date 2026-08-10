@@ -402,8 +402,13 @@ struct TransactionsView: View {
     }
 
     /// Applies a deep-linked filter from `router.openTransactions(filter:)`, then clears it.
+    /// Pops to the root list first — the filter lands on this screen, which may be sitting
+    /// under previously pushed detail views.
     private func consumePendingFilter() {
         guard let pending = router.pendingTransactionFilter else { return }
+        if !router.transactionsPath.isEmpty {
+            router.transactionsPath = NavigationPath()
+        }
         searchText = pending.search ?? ""
         debouncedSearch = searchText
         accountFilter = pending.accountID ?? ""
