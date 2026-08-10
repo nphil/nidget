@@ -16,6 +16,7 @@ struct CategoryPickerSheet: View {
 
     @State private var searchText = ""
     @State private var recentIDs: [String] = []
+    @State private var categoryEditor: CategoryEditorMode?
 
     init(categoryID: Binding<String?>) {
         self._categoryID = categoryID
@@ -30,6 +31,15 @@ struct CategoryPickerSheet: View {
         .padding(.top, theme.layout.spacing)
         .themedScreen()
         .task { await loadRecents() }
+        .sheet(item: $categoryEditor) { mode in
+            CategoryEditorSheet(mode: mode, initialName: trimmedSearch) { newID in
+                // Select what the user just created so they never have to hunt for it.
+                guard let newID else { return }
+                categoryID = newID
+                Haptics.success()
+                dismiss()
+            }
+        }
     }
 
     // MARK: Header & search
@@ -97,7 +107,12 @@ struct CategoryPickerSheet: View {
         if allVisibleCategories.isEmpty {
             EmptyStateView(systemImage: "tag",
                            title: "No categories yet",
-                           message: "This budget has no categories to pick from. Add some in Actual and they'll appear here.")
+                           message: "Categories live inside groups — make a group first, then add categories to it.",
+                           actionTitle: "New Group",
+                           action: {
+                               Haptics.tap()
+                               categoryEditor = .newGroup(isIncome: false)
+                           })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
@@ -141,7 +156,12 @@ struct CategoryPickerSheet: View {
         if matches.isEmpty {
             EmptyStateView(systemImage: "magnifyingglass",
                            title: "No category found",
-                           message: "Nothing named anything like that. Try fewer letters.")
+                           message: "Nothing named anything like that — you can make it now.",
+                           actionTitle: "Create “\(trimmedSearch)”",
+                           action: {
+                               Haptics.tap()
+                               categoryEditor = .newCategory(groupID: nil)
+                           })
                 .padding(.top, theme.layout.spacing * 2)
         } else {
             ForEach(matches) { match in

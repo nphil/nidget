@@ -192,6 +192,47 @@ enum Mutations {
         ]
     }
 
+    /// Creates a category plus its `category_mapping` self-row.
+    ///
+    /// NOTE the asymmetry with `payee_mapping`: the mapping column here is **`transferId`**, not
+    /// `targetId` (PROTOCOL §8.4 — `transactions.category` is a FK into `category_mapping.id` →
+    /// `transferId`). Without this row the category exists but no transaction can resolve to it.
+    /// `cat_group` is the raw SQLite column for the owning group (public AQL name is `group`).
+    static func createCategory(id: String,
+                               name: String,
+                               groupID: String,
+                               isIncome: Bool,
+                               sortOrder: Double) -> [CellWrite] {
+        [
+            CellWrite(dataset: "categories", row: id, column: "name", value: .string(name)),
+            CellWrite(dataset: "categories", row: id, column: "cat_group", value: .string(groupID)),
+            CellWrite(dataset: "categories", row: id, column: "is_income", value: bool(isIncome)),
+            CellWrite(dataset: "categories", row: id, column: "sort_order", value: .number(sortOrder)),
+            CellWrite(dataset: "categories", row: id, column: "hidden", value: bool(false)),
+            CellWrite(dataset: "categories", row: id, column: "tombstone", value: bool(false)),
+            CellWrite(dataset: "category_mapping", row: id, column: "transferId", value: .string(id)),
+        ]
+    }
+
+    /// Creates a category group. Groups have no mapping table (only categories are mergeable).
+    static func createCategoryGroup(id: String,
+                                    name: String,
+                                    isIncome: Bool,
+                                    sortOrder: Double) -> [CellWrite] {
+        [
+            CellWrite(dataset: "category_groups", row: id, column: "name", value: .string(name)),
+            CellWrite(dataset: "category_groups", row: id, column: "is_income", value: bool(isIncome)),
+            CellWrite(dataset: "category_groups", row: id, column: "sort_order", value: .number(sortOrder)),
+            CellWrite(dataset: "category_groups", row: id, column: "hidden", value: bool(false)),
+            CellWrite(dataset: "category_groups", row: id, column: "tombstone", value: bool(false)),
+        ]
+    }
+
+    /// Renames a category or group (`dataset` is `categories` or `category_groups`).
+    static func rename(dataset: String, id: String, name: String) -> [CellWrite] {
+        [CellWrite(dataset: dataset, row: id, column: "name", value: .string(name))]
+    }
+
     // MARK: - Value helpers
 
     private static func bool(_ value: Bool) -> CRDTValue {

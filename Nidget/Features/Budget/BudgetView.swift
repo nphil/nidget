@@ -28,6 +28,7 @@ struct BudgetView: View {
 
     @State private var editingRow: BudgetRowSnapshot?
     @State private var moveMoneyTarget: MoveMoneyTarget?
+    @State private var categoryEditor: CategoryEditorMode?
 
     init() {}
 
@@ -54,6 +55,9 @@ struct BudgetView: View {
             BudgetAmountEditor(row: row, month: store.currentMonth)
                 .presentationDetents([.height(420)])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $categoryEditor) { mode in
+            CategoryEditorSheet(mode: mode)
         }
         .sheet(item: $moveMoneyTarget) { target in
             MoveMoneySheet(month: store.currentMonth, initialFromCategoryID: target.categoryID)
@@ -215,6 +219,7 @@ struct BudgetView: View {
                     }
                 }
             }
+            newGroupRow
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -235,9 +240,55 @@ struct BudgetView: View {
             .listRowInsets(rowInsets)
     }
 
+    /// Tail row of the budget list: create a whole new group (categories live inside groups, so
+    /// this is the other half of the "+" on each group header).
+    private var newGroupRow: some View {
+        Button {
+            Haptics.tap()
+            categoryEditor = .newGroup(isIncome: false)
+        } label: {
+            HStack(spacing: theme.layout.spacing * 0.75) {
+                Image(systemName: "folder.badge.plus")
+                    .font(theme.font(.body))
+                    .fontWeight(theme.icons.weight)
+                    .symbolVariant(theme.icons.fill ? .fill : .none)
+                Text("New Group")
+                    .font(theme.font(.body))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(theme.palette.accent)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets)
+        .padding(.top, theme.layout.spacing)
+    }
+
+    /// Trailing "+" on every group header — the discoverable place to add a category, right where
+    /// that group's categories are listed.
     private func groupHeader(_ group: CategoryGroup) -> some View {
         SectionHeader(group.name, trailing: {
-            AnyView(AmountText(groupBudgetedTotal(group), style: .caption, colorized: false))
+            AnyView(
+                HStack(spacing: theme.layout.spacing * 0.75) {
+                    AmountText(groupBudgetedTotal(group), style: .caption, colorized: false)
+                    Button {
+                        Haptics.tap()
+                        categoryEditor = .newCategory(groupID: group.id)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(theme.font(.caption))
+                            .fontWeight(theme.icons.weight)
+                            .foregroundStyle(theme.palette.accent)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add a category to \(group.name)")
+                }
+            )
         })
         .padding(.top, theme.layout.spacing * 0.75)
         .animation(reduceMotion ? nil : theme.motion.spring, value: groupBudgetedTotal(group))

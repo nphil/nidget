@@ -763,6 +763,67 @@ final class AppStore {
         await perform(writes, failureMessage: "Couldn't move money")
     }
 
+    /// Creates a category inside `groupID`. Returns its id, or nil when the name is blank, the
+    /// group is unknown, or the write failed (`lastError` is set in that case).
+    ///
+    /// A new category sorts after everything already in its group; `isIncome` is inherited from
+    /// the group so an income group never gains a spending category.
+    @discardableResult
+    func createCategory(name: String, groupID: String) async -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let group = categoryGroups.first(where: { $0.id == groupID }) else {
+            lastError = AppError(message: "Couldn't create the category",
+                                 detail: "That category group no longer exists.")
+            return nil
+        }
+        if let existing = group.categories.first(where: {
+            $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) {
+            return existing.id   // already there — reuse rather than mint a confusing duplicate
+        }
+        let id = Mutations.newID()
+        let sortOrder = (group.categories.map(\.sortOrder).max() ?? 0) + 1
+        let ok = await perform(Mutations.createCategory(id: id,
+                                                        name: trimmed,
+                                                        groupID: groupID,
+                                                        isIncome: group.isIncome,
+                                                        sortOrder: sortOrder),
+                               failureMessage: "Couldn't create the category")
+        return ok ? id : nil
+    }
+
+    /// Creates a spending (or income) category group. Returns its id, or nil on blank name/failure.
+    @discardableResult
+    func createCategoryGroup(name: String, isIncome: Bool = false) async -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let existing = categoryGroups.first(where: {
+            $0.isIncome == isIncome &&
+                $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) {
+            return existing.id
+        }
+        let id = Mutations.newID()
+        let sortOrder = (categoryGroups.filter { $0.isIncome == isIncome }
+            .map(\.sortOrder).max() ?? 0) + 1
+        let ok = await perform(Mutations.createCategoryGroup(id: id,
+                                                             name: trimmed,
+                                                             isIncome: isIncome,
+                                                             sortOrder: sortOrder),
+                               failureMessage: "Couldn't create the group")
+        return ok ? id : nil
+    }
+
+    /// Renames a category or a category group.
+    func renameCategory(id: String, to name: String, isGroup: Bool) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        await perform(Mutations.rename(dataset: isGroup ? "category_groups" : "categories",
+                                       id: id, name: trimmed),
+                      failureMessage: "Couldn't rename")
+    }
+
     /// Returns the id the payee ends up with: an existing payee on a case-insensitive name
     /// match (no duplicate is minted), else a freshly created one.
     func createPayee(name: String) async -> String {
@@ -801,11 +862,16 @@ final class AppStore {
     }
 
     /// Shared mutation tail — see the Mutations MARK note.
-    private func perform(_ writes: [Mutations.CellWrite], failureMessage: String) async {
-        guard !writes.isEmpty else { return }
+    ///
+    /// Returns whether the write landed. Callers that mint an id (categories, groups) must use
+    /// this result rather than inspecting `lastError`, which persists until the user dismisses it
+    /// and therefore says nothing about *this* call.
+    @discardableResult
+    private func perform(_ writes: [Mutations.CellWrite], failureMessage: String) async -> Bool {
+        guard !writes.isEmpty else { return true }
         guard let engine else {
             lastError = AppError(message: failureMessage, detail: "No budget file is open.")
-            return
+            return false
         }
         do {
             let timestamps = try await engine.nextTimestamps(count: writes.count)
@@ -813,11 +879,13 @@ final class AppStore {
             guard await engine.enqueue(messages) else {
                 lastError = AppError(message: failureMessage,
                                      detail: "The change couldn't be written to the budget file.")
-                return
+                return false
             }
             await refreshAll()
+            return true
         } catch {
             lastError = AppError(message: failureMessage, detail: error.localizedDescription)
+            return false
         }
     }
 
