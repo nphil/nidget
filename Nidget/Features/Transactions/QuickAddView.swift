@@ -28,6 +28,9 @@ struct QuickAddView: View {
 
     // Presentation state
     @State private var topCategoryIDs: [String] = []
+    /// Top on-device category pick for an unknown payee (docs/AI.md §3). Never auto-applied;
+    /// shown as a tappable sparkles chip ahead of the usual category chips.
+    @State private var aiSuggestion: CategorySuggestion?
     @State private var preSheetCategoryID: String?
     @State private var showCategorySheet = false
     @State private var showDatePicker = false
@@ -81,6 +84,9 @@ struct QuickAddView: View {
             configureDefaultAccount()
             await loadTopCategories()
         }
+        .task(id: aiSuggestionKey) {
+            await refreshAISuggestion()
+        }
     }
 
     private var heroRow: some View {
@@ -117,6 +123,10 @@ struct QuickAddView: View {
     private var categoryChipRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                if let suggestion = aiSuggestion,
+                   !store.categoryName(suggestion.categoryID).isEmpty {
+                    aiSuggestionChip(suggestion)
+                }
                 ForEach(displayCategoryIDs, id: \.self) { id in
                     categoryChip(id)
                 }
@@ -196,6 +206,87 @@ struct QuickAddView: View {
             categoryID = auto
         } else {
             withAnimation(theme.motion.snappy) { categoryID = auto }
+        }
+    }
+
+    // MARK: AI category suggestion (docs/AI.md §3)
+
+    /// Non-empty exactly when the AI chip should be (re)computed: the Quick Add toggle is
+    /// on, an embedding model is ready, the payee has text, and no category is set — i.e.
+    /// the payee's history gave Quick Add nothing to auto-fill. Empty key = no chip, so the
+    /// flow is exactly the stock one when AI is off or absent.
+    private var aiSuggestionKey: String {
+        guard preferences.aiQuickAddSuggestions,
+              CategorySuggestionService.shared.embeddingReady,
+              categoryID == nil else { return "" }
+        let payee = payeeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return payee.isEmpty ? "" : payee.lowercased()
+    }
+
+    private func refreshAISuggestion() async {
+        guard !aiSuggestionKey.isEmpty else {
+            if aiSuggestion != nil { aiSuggestion = nil }
+            return
+        }
+        // Let typing settle first; embedding the query is the expensive step.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        let payee = payeeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let top = await CategorySuggestionService.shared
+            .suggest(payee: payee, notes: nil, limit: 1)
+            .first { !store.categoryName($0.categoryID).isEmpty }
+        guard !Task.isCancelled else { return }
+        if reduceMotion {
+            aiSuggestion = top
+        } else {
+            withAnimation(theme.motion.snappy) { aiSuggestion = top }
+        }
+    }
+
+    /// Distinct sparkles chip for the on-device pick. Tap accepts; it is never auto-applied.
+    private func aiSuggestionChip(_ suggestion: CategorySuggestion) -> some View {
+        let name = store.categoryName(suggestion.categoryID)
+        return Button {
+            acceptAISuggestion(suggestion)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                    .font(theme.font(.caption))
+                    .fontWeight(theme.icons.weight)
+                    .symbolVariant(theme.icons.fill ? .fill : .none)
+                Text(name)
+                    .lineLimit(1)
+            }
+            .font(theme.font(.subheadline))
+            .fontWeight(.semibold)
+            .foregroundStyle(theme.palette.accent)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background {
+                Capsule()
+                    .fill(theme.palette.accent.opacity(0.14))
+                    .overlay {
+                        Capsule().strokeBorder(theme.palette.accent.opacity(0.55), lineWidth: 1)
+                    }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Suggested category: \(name)")
+        .accessibilityHint("Uses this category")
+    }
+
+    private func acceptAISuggestion(_ suggestion: CategorySuggestion) {
+        Haptics.tick()
+        userPickedCategory = true
+        if reduceMotion {
+            categoryID = suggestion.categoryID
+            aiSuggestion = nil
+        } else {
+            withAnimation(theme.motion.snappy) {
+                categoryID = suggestion.categoryID
+                aiSuggestion = nil
+            }
         }
     }
 

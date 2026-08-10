@@ -12,6 +12,7 @@ import SwiftUI
 struct TransactionsView: View {
     @Environment(AppStore.self) private var store
     @Environment(AppRouter.self) private var router
+    @Environment(Preferences.self) private var preferences
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -37,6 +38,11 @@ struct TransactionsView: View {
     @State private var clearedEditSeq: [String: Int] = [:]
     @State private var pendingDelete: Transaction?
     @State private var showDeleteConfirm = false
+
+    // Semantic search (docs/AI.md §3) — strong index matches shown after the substring
+    // results. Always empty when AI is off or no embedding model is installed.
+    @State private var relatedTransactions: [Transaction] = []
+    @State private var isLoadingRelated = false
 
     private static let batchSize = 100
 
@@ -69,6 +75,7 @@ struct TransactionsView: View {
             let preserve = loadedFilterKey == filterKey
             await reload(preservingDepth: preserve)
         }
+        .task(id: semanticKey) { await refreshRelated() }
         .onChange(of: router.quickAddPresented) { _, presented in
             if !presented {
                 Task { await reload(preservingDepth: true) }
@@ -221,6 +228,7 @@ struct TransactionsView: View {
         List {
             if transactions.isEmpty && !isLoading && hasLoadedOnce {
                 emptyRow
+                relatedRows   // semantic hits can exist even when substring search found nothing
             } else {
                 ForEach(daySections) { section in
                     dayHeaderRow(section.day)
@@ -231,6 +239,7 @@ struct TransactionsView: View {
                 if isLoadingMore {
                     loadingMoreRow
                 }
+                relatedRows
             }
         }
         .listStyle(.plain)
@@ -342,6 +351,100 @@ struct TransactionsView: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    // MARK: Related (semantic) matches — docs/AI.md §3
+
+    /// Non-empty exactly when hybrid semantic search should run: the preference is on, an
+    /// embedding model is ready, and there is settled search text. Empty key = the list is
+    /// exactly the stock substring experience.
+    private var semanticKey: String {
+        guard preferences.aiSemanticSearch,
+              CategorySuggestionService.shared.embeddingReady,
+              !debouncedSearch.isEmpty else { return "" }
+        return debouncedSearch
+    }
+
+    /// Embed the query, pull strong neighbours (similarity ≥ 0.55) from the index, and
+    /// resolve them to full rows. Substring results are untouched; overlap is filtered out
+    /// at render time so paging can never duplicate a row.
+    private func refreshRelated() async {
+        guard !semanticKey.isEmpty else {
+            isLoadingRelated = false
+            if !relatedTransactions.isEmpty { relatedTransactions = [] }
+            return
+        }
+        isLoadingRelated = true
+        let hits = await EmbeddingIndex.shared.nearest(to: semanticKey, limit: 40)
+        guard !Task.isCancelled else { return }
+        let strongIDs = hits.filter { $0.similarity >= 0.55 }.map { $0.txID }
+        guard !strongIDs.isEmpty else {
+            isLoadingRelated = false
+            relatedTransactions = []
+            return
+        }
+        let rows = await CategorySuggestionService.shared.transactions(matching: strongIDs)
+        guard !Task.isCancelled else { return }
+        isLoadingRelated = false
+        relatedTransactions = rows
+    }
+
+    /// Related rows actually shown: semantic hits minus anything the substring list already
+    /// shows, still honoring the visible filter bar so the section never contradicts it.
+    private var visibleRelated: [Transaction] {
+        guard !relatedTransactions.isEmpty else { return [] }
+        let shownIDs = Set(transactions.map(\.id))
+        return relatedTransactions.filter { transaction in
+            if shownIDs.contains(transaction.id) { return false }
+            if !accountFilter.isEmpty && transaction.accountID != accountFilter { return false }
+            if uncategorizedOnly && transaction.categoryID != nil { return false }
+            if let categoryFilter, transaction.categoryID != categoryFilter { return false }
+            if let payeeFilter, transaction.payeeID != payeeFilter { return false }
+            if let monthsFilter, !monthsFilter.contains(transaction.date.month) { return false }
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private var relatedRows: some View {
+        if isLoadingRelated {
+            relatedLoadingRow
+        } else if !visibleRelated.isEmpty {
+            relatedHeaderRow
+            ForEach(visibleRelated) { transaction in
+                row(transaction)
+            }
+        }
+    }
+
+    private var relatedHeaderRow: some View {
+        SectionHeader("Related", trailing: {
+            AnyView(
+                Image(systemName: "sparkles")
+                    .font(theme.font(.caption))
+                    .fontWeight(theme.icons.weight)
+                    .symbolVariant(theme.icons.fill ? .fill : .none)
+                    .foregroundStyle(theme.palette.accent)
+            )
+        })
+        .padding(.top, theme.layout.spacing * 0.5)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets)
+    }
+
+    /// Tiny inline spinner shown while the query embeds and the index is searched.
+    private var relatedLoadingRow: some View {
+        HStack {
+            Spacer()
+            ProgressView()
+                .controlSize(.mini)
+                .tint(theme.palette.accent)
+            Spacer()
+        }
+        .frame(minHeight: 28)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     // MARK: Day grouping
@@ -478,13 +581,11 @@ struct TransactionsView: View {
         let seq = (clearedEditSeq[transaction.id] ?? 0) + 1
         clearedEditSeq[transaction.id] = seq
         Haptics.tick()
-        if let index = transactions.firstIndex(where: { $0.id == transaction.id }) {
-            if reduceMotion {
-                transactions[index].cleared = newValue
-            } else {
-                withAnimation(theme.motion.spring) {
-                    transactions[index].cleared = newValue
-                }
+        if reduceMotion {
+            applyClearedLocally(id: transaction.id, cleared: newValue)
+        } else {
+            withAnimation(theme.motion.spring) {
+                applyClearedLocally(id: transaction.id, cleared: newValue)
             }
         }
         Task {
@@ -492,10 +593,20 @@ struct TransactionsView: View {
             // Only the latest edit for this id may touch state afterward — an older,
             // slower write must not clobber a newer toggle (LESSONS §2).
             guard clearedEditSeq[transaction.id] == seq else { return }
-            if let index = transactions.firstIndex(where: { $0.id == transaction.id }),
-               transactions[index].cleared != newValue {
-                transactions[index].cleared = newValue
-            }
+            applyClearedLocally(id: transaction.id, cleared: newValue)
+        }
+    }
+
+    /// Writes a cleared value into every local copy of the row (the substring run AND the
+    /// semantic Related section, which hold separate value snapshots of the same id).
+    private func applyClearedLocally(id: String, cleared: Bool) {
+        if let index = transactions.firstIndex(where: { $0.id == id }),
+           transactions[index].cleared != cleared {
+            transactions[index].cleared = cleared
+        }
+        if let index = relatedTransactions.firstIndex(where: { $0.id == id }),
+           relatedTransactions[index].cleared != cleared {
+            relatedTransactions[index].cleared = cleared
         }
     }
 
@@ -511,9 +622,11 @@ struct TransactionsView: View {
         Haptics.warning()
         if reduceMotion {
             transactions.removeAll { $0.id == transaction.id }
+            relatedTransactions.removeAll { $0.id == transaction.id }
         } else {
             withAnimation(theme.motion.spring) {
                 transactions.removeAll { $0.id == transaction.id }
+                relatedTransactions.removeAll { $0.id == transaction.id }
             }
         }
         pendingDelete = nil

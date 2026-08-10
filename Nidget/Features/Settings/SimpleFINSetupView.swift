@@ -275,6 +275,10 @@ struct SimpleFINSetupView: View {
                          count: summary.imported, color: theme.palette.positive)
                 resultRow(systemImage: "checkmark.circle", label: "Already had",
                          count: summary.skipped, color: theme.palette.textSecondary)
+                if summary.autoCategorized > 0 {
+                    resultRow(systemImage: "sparkles", label: "Auto-categorized",
+                             count: summary.autoCategorized, color: theme.palette.accent)
+                }
                 if summary.pendingSkipped > 0 {
                     resultRow(systemImage: "clock", label: "Pending (skipped)",
                              count: summary.pendingSkipped, color: theme.palette.textTertiary)

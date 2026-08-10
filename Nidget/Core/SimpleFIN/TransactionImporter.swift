@@ -25,6 +25,9 @@ struct ImportSummary: Sendable {
     var unmapped: [SFAccount]
     /// Per mapped account: display name and how many new transactions this run added.
     var perAccount: [(name: String, added: Int)]
+    /// Imported drafts the on-device suggester categorized automatically (docs/AI.md §3).
+    /// Set by AppStore after planning; stays 0 whenever auto-categorize is off.
+    var autoCategorized: Int = 0
 }
 
 /// One transaction ready to insert: the target Actual account, the draft itself, and the

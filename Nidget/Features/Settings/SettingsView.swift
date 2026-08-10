@@ -3,13 +3,16 @@ import SwiftUI
 // MARK: - SettingsView
 //
 // The Settings tab root (ARCHITECTURE §14/§16): a custom themed layout of cards — never a plain
-// Form — covering the server connection, SimpleFIN linking, Appearance (with the theme gallery
-// entry point), Dashboard editing, Security, Preferences, and About. Every card reads its state
-// live from `AppStore`/`Preferences`/`ThemeManager`/`KeychainStore` on every body evaluation (no
-// locally mirrored copies), so returning from a pushed screen (SimpleFIN mapping, theme gallery,
-// security settings) always reflects the latest state without a manual refresh hook — SwiftUI
-// re-invokes `body` whenever `router.settingsPath` changes (it's read via the `NavigationStack`
-// binding), which covers every push/pop through this tab.
+// Form — covering the server connection, SimpleFIN linking, Intelligence (on-device AI), Appearance
+// (with the theme gallery entry point), Dashboard editing, Security, Preferences, and About. Every
+// card reads its state live from `AppStore`/`Preferences`/`ThemeManager`/`KeychainStore` on every
+// body evaluation (no locally mirrored copies), so returning from a pushed screen (SimpleFIN
+// mapping, theme gallery, security settings, Intelligence) always reflects the latest state
+// without a manual refresh hook — SwiftUI re-invokes `body` whenever `router.settingsPath` changes
+// (it's read via the `NavigationStack` binding), which covers every push/pop through this tab.
+// The Intelligence card additionally reads `AIModelManager`/`ModelDownloadManager` — singletons
+// not in ARCHITECTURE §16's environment-injection list, so they're read directly via `.shared`,
+// same discipline as `KeychainStore` above.
 //
 // Server host display parses `KeychainStore`'s stored server URL for display only — the password
 // and session token are never read here, matching ARCHITECTURE §9's "never show credentials" rule
@@ -47,6 +50,7 @@ struct SettingsView: View {
             VStack(spacing: theme.layout.cardSpacing) {
                 serverCard
                 simpleFINCard
+                intelligenceCard
                 appearanceCard
                 dashboardCard
                 securityCard
@@ -226,6 +230,9 @@ struct SettingsView: View {
             HStack(spacing: theme.layout.spacing * 0.75) {
                 summaryChip(systemImage: "arrow.down.circle", count: summary.imported, color: theme.palette.positive)
                 summaryChip(systemImage: "checkmark.circle", count: summary.skipped, color: theme.palette.textTertiary)
+                if summary.autoCategorized > 0 {
+                    summaryChip(systemImage: "sparkles", count: summary.autoCategorized, color: theme.palette.accent)
+                }
                 if !summary.unmapped.isEmpty {
                     summaryChip(systemImage: "exclamationmark.triangle",
                                count: summary.unmapped.count, color: theme.palette.warning)
@@ -263,6 +270,25 @@ struct SettingsView: View {
                     withAnimation(theme.motion.spring) { lastImportSummary = summary }
                 }
                 Haptics.success()
+            }
+        }
+    }
+
+    // MARK: - Intelligence card
+
+    private var installedAIModelCount: Int {
+        AIModelManager.shared.customModels.filter { ModelDownloadManager.shared.isReady($0.id) }.count
+    }
+
+    private var intelligenceSubtitle: String {
+        let count = installedAIModelCount
+        return count > 0 ? "\(count) model\(count == 1 ? "" : "s") installed" : "Off"
+    }
+
+    private var intelligenceCard: some View {
+        SettingsCard(title: "Intelligence", systemImage: "sparkles") {
+            navRow("On-Device AI", systemImage: "brain", detail: intelligenceSubtitle) {
+                router.push(.intelligence)
             }
         }
     }

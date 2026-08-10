@@ -176,6 +176,8 @@ final class AppStore {
     private var cachedFiles: [RemoteFile] = []
     private var payeeNameByID: [String: String] = [:]
     private var categoryNameByID: [String: String] = [:]
+    /// Debounce handle for the background embedding reindex (docs/AI.md §3).
+    private var reindexDebounceTask: Task<Void, Never>?
 
     private static let log = Logger(subsystem: "app.nidget", category: "store")
 
@@ -416,8 +418,12 @@ final class AppStore {
 
         // The semantic index is derived from budget data — it lives beside the budget file
         // (Documents/nidget-ai.sqlite) and must be wiped with it. Routed through the actor
-        // so the file is closed before deletion (WAL siblings included).
+        // so the file is closed before deletion (WAL siblings included). Any pending reindex
+        // is cancelled and the suggestion service forgets its ledger snapshot.
+        reindexDebounceTask?.cancel()
+        reindexDebounceTask = nil
         await EmbeddingIndex.shared.deleteDatabaseFile()
+        CategorySuggestionService.shared.reset()
 
         for key in [KeychainKey.serverURL, KeychainKey.password, KeychainKey.token,
                     KeychainKey.fileID, KeychainKey.groupID, KeychainKey.e2ePassword,
@@ -493,6 +499,12 @@ final class AppStore {
             self.categoryNameByID = categoryNames
 
             await refreshMonthSnapshot()
+
+            // AI upkeep: the ledger snapshot behind category suggestions is now stale, and
+            // the semantic index may be missing freshly synced/imported rows. Both are no-ops
+            // when no embedding model is configured.
+            CategorySuggestionService.shared.noteDataChanged()
+            scheduleEmbeddingReindex()
         } catch {
             Self.log.error("refreshAll failed: \(error.localizedDescription, privacy: .public)")
             lastError = AppError(message: "Couldn't read the budget file",
@@ -1096,12 +1108,18 @@ final class AppStore {
                                                   includePending: false,
                                                   defaultCleared: true)
 
+            // Optional on-device auto-categorize pass (docs/AI.md §3): only high-confidence
+            // picks are applied, and only when the toggle is on and a model is ready.
+            let (plannedDrafts, autoCategorized) = await autoCategorizedDrafts(plan.drafts)
+            var summary = plan.summary
+            summary.autoCategorized = autoCategorized
+
             var writes: [Mutations.CellWrite] = []
             var payeeIDByLoweredName: [String: String] = [:]
             for payee in payees where payee.transferAccountID == nil {
                 payeeIDByLoweredName[payee.name.lowercased()] = payee.id
             }
-            for planned in plan.drafts {
+            for planned in plannedDrafts {
                 var draft = planned.draft
                 let bankPayee = draft.newPayeeName
                 if draft.payeeID == nil, let name = bankPayee, !name.isEmpty {
@@ -1129,13 +1147,95 @@ final class AppStore {
                 }
                 await refreshAll()
             }
-            Self.log.info("SimpleFIN import: \(plan.summary.imported) new, \(plan.summary.skipped) duplicate(s), \(plan.summary.unmapped.count) unmapped account(s)")
-            return plan.summary
+            Self.log.info("SimpleFIN import: \(summary.imported) new, \(summary.skipped) duplicate(s), \(summary.autoCategorized) auto-categorized, \(summary.unmapped.count) unmapped account(s)")
+            return summary
         } catch {
             lastError = AppError(message: "SimpleFIN import failed",
                                  detail: Self.friendlyMessage(for: error, fallback: "Unknown error."))
             return nil
         }
+    }
+
+    /// Runs the on-device category suggester over uncategorized import drafts, applying only
+    /// picks with confidence ≥ 0.75 (docs/AI.md §3). Returns the updated drafts plus how many
+    /// were categorized. Instant no-op when the `aiAutoCategorize` toggle is off or no
+    /// embedding model is ready, so the import flow is unchanged without AI.
+    private func autoCategorizedDrafts(_ drafts: [PlannedImport]) async -> ([PlannedImport], Int) {
+        guard Preferences.shared.aiAutoCategorize,
+              CategorySuggestionService.shared.embeddingReady,
+              !drafts.isEmpty else {
+            return (drafts, 0)
+        }
+        var drafts = drafts
+        var applied = 0
+        // A bank batch often repeats the same payee — suggest once per distinct text.
+        var suggestionByText: [String: CategorySuggestion?] = [:]
+        for index in drafts.indices where drafts[index].draft.categoryID == nil {
+            let draft = drafts[index].draft
+            let payee = draft.newPayeeName ?? ""
+            let text = EmbeddingIndex.embeddedText(payee: payee, notes: draft.notes)
+            guard !text.isEmpty else { continue }
+            let suggestion: CategorySuggestion?
+            if let cached = suggestionByText[text] {
+                suggestion = cached
+            } else {
+                suggestion = await CategorySuggestionService.shared
+                    .suggest(payee: payee, notes: draft.notes, limit: 1).first
+                suggestionByText[text] = suggestion
+            }
+            guard let suggestion, suggestion.confidence >= 0.75 else { continue }
+            drafts[index].draft.categoryID = suggestion.categoryID
+            applied += 1
+        }
+        if applied > 0 {
+            Self.log.info("Auto-categorized \(applied) imported transaction(s)")
+        }
+        return (drafts, applied)
+    }
+
+    // MARK: - Semantic index upkeep (docs/AI.md §3)
+
+    /// Debounce-kicks a background reindex of the transaction embedding index so semantic
+    /// features track fresh data after sync/import/mutations. No-op when no budget is open
+    /// or no embedding model is configured; the blocking llama work runs on the
+    /// EmbeddingIndex/Engine actors, never the main thread.
+    private func scheduleEmbeddingReindex() {
+        guard dbQueue != nil, AIModelManager.shared.embeddingModelID != nil else { return }
+        reindexDebounceTask?.cancel()
+        reindexDebounceTask = Task.detached(priority: .low) { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard let self, !Task.isCancelled else { return }
+            await self.rebuildEmbeddingIndex()
+        }
+    }
+
+    /// Pages the whole ledger through the existing read API into `EmbeddingIndex.reindex`
+    /// input (id, "payee — notes" text, category). The index's incremental hashing keeps
+    /// repeat runs cheap; only changed rows are re-embedded.
+    private func rebuildEmbeddingIndex() async {
+        guard dbQueue != nil,
+              let modelID = AIModelManager.shared.embeddingModelID,
+              ModelDownloadManager.shared.isReady(modelID) else { return }
+        var input: [(id: String, text: String, categoryID: String?)] = []
+        let pageSize = 500
+        var offset = 0
+        while true {
+            let page = await transactions(TransactionQuery(limit: pageSize, offset: offset))
+            guard !Task.isCancelled else { return }
+            for transaction in page {
+                input.append((id: transaction.id,
+                              text: EmbeddingIndex.embeddedText(payee: payeeName(transaction.payeeID),
+                                                                notes: transaction.notes),
+                              categoryID: transaction.categoryID))
+            }
+            if page.count < pageSize { break }
+            offset += page.count
+        }
+        guard !input.isEmpty else { return }
+        await EmbeddingIndex.shared.reindex(transactions: input, modelID: modelID)
+        // The index's category cache was just rebuilt from this input; the suggestion
+        // service's ledger snapshot should follow on next use.
+        CategorySuggestionService.shared.noteDataChanged()
     }
 
     // MARK: - E2E helpers
