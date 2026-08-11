@@ -1146,7 +1146,7 @@ final class AppStore {
         guard !candidates.isEmpty else { return }
 
         var writes: [Mutations.CellWrite] = []
-        var applied = 0
+        var appliedIDs: [String] = []
         for transaction in candidates {
             autoCategorizeAttemptedIDs.insert(transaction.id)
             let suggestion = await CategorySuggestionService.shared
@@ -1155,14 +1155,349 @@ final class AppStore {
             guard let suggestion, suggestion.confidence >= 0.75 else { continue }
             writes += Mutations.updateFields(dataset: "transactions", id: transaction.id,
                                              fields: [(column: "category", value: .string(suggestion.categoryID))])
-            applied += 1
+            appliedIDs.append(transaction.id)
         }
         guard !writes.isEmpty else { return }
         guard let timestamps = try? await engine.nextTimestamps(count: writes.count),
               timestamps.count == writes.count,
               await engine.enqueue(Mutations.messages(writes, timestamps: timestamps)) else { return }
+        // Remember what Nidget filed on its own so the review queue can offer a spot check
+        // (docs/AI.md §7). Recorded only for writes that actually landed, which is why this
+        // sits after the enqueue rather than inside the loop.
+        var filed = Preferences.shared.aiAutoFiledIDs
+        let now = Date().timeIntervalSince1970
+        for id in appliedIDs {
+            filed[id] = now
+        }
+        Preferences.shared.aiAutoFiledIDs = filed
         await refreshAll()
-        Self.aiLog.info("Auto-categorized \(applied) newly synced transaction(s)")
+        Self.aiLog.info("Auto-categorized \(appliedIDs.count) newly synced transaction(s)")
+    }
+
+    // MARK: - Review queue (docs/AI.md §7)
+    //
+    // Bank imports land on the server, so the daily job is triaging what arrived. The queue
+    // proposes a category for each new transaction from three sources, cheapest first:
+    //
+    // 1. Payee history — this payee has been filed before, so its most common category is the
+    //    proposal. One query, no AI, and it is exact for repeat spending, which is most of it.
+    //    This is why the whole feature still works on a phone with no model downloaded.
+    // 2. Embedding kNN — only for payees with no history, only when a model is ready, and capped
+    //    at `reviewAILookupCap` per build so opening the screen never stalls.
+    // 3. Nothing — into the "needs a category" bucket.
+    //
+    // Anything `autoCategorizeNewArrivals` filed on its own rides along in a third bucket for a
+    // spot check (`Preferences.aiAutoFiledIDs`).
+
+    /// How far back the queue looks for work.
+    private static let reviewWindowDays = 90
+    /// How far back the payee-history vote looks.
+    private static let reviewHistoryDays = 180
+    /// Most AI lookups one `reviewQueue` build may spend (docs/AI.md §7).
+    private static let reviewAILookupCap = 25
+
+    /// Cheap count for the dashboard widget and the Transactions badge: how many recent
+    /// transactions still need a category decision. No AI work, one query. Deliberately does
+    /// NOT include the AI's own filings — see `autoFiledCount`.
+    func reviewCount() async -> Int {
+        // Cheap and in-memory: without it a month-old spot check would keep padding the badge
+        // until the screen it points at is opened.
+        Preferences.shared.pruneAutoFiled()
+        guard let dbQueue else { return 0 }
+        let cutoff = BudgetDay.today.addingDays(-Self.reviewWindowDays)
+        let query = TransactionQuery(months: cutoff.month...BudgetMonth.current,
+                                     onlyUncategorized: true, limit: 500)
+        let rows = (try? await dbQueue.read({ db -> [Transaction] in
+            try db.transactions(query)
+        })) ?? []
+        return rows.filter { isReviewCandidate($0, cutoff: cutoff) }.count
+    }
+
+    /// How many transactions the AI filed on its own and hasn't been spot-checked yet. Kept
+    /// SEPARATE from `reviewCount()` on purpose: a badge is a call to action, and the whole
+    /// point of the AI filing something is that it needs no action. Folding these in would
+    /// show "12 to review" when eleven of them are already done. Surfaces as a quieter
+    /// secondary line so the section is still discoverable.
+    var autoFiledCount: Int {
+        Preferences.shared.aiAutoFiledIDs.count
+    }
+
+    /// The full queue, grouped. Groups are ordered: suggestion groups by descending item count,
+    /// then needsCategory, then autoFiled last (the UI renders that one collapsed).
+    func reviewQueue(limit: Int = 200) async -> [ReviewGroup] {
+        Preferences.shared.pruneAutoFiled()
+        guard let dbQueue else { return [] }
+        let capped = max(1, limit)
+        let eligible = reviewEligibleCategoryIDs()
+
+        // Auto-filed first: those ids are excluded from the fresh candidates below so a
+        // transaction can never show up in two buckets.
+        let autoFiledItems = await autoFiledReviewItems(eligible: eligible)
+        let autoFiledIDs = Set(autoFiledItems.map(\.id))
+
+        // Candidates: uncategorized, in the window, not a transfer, not Actual's synthetic
+        // opening-balance rows. Paged the way autoCategorizeNewArrivals pages.
+        let cutoff = BudgetDay.today.addingDays(-Self.reviewWindowDays)
+        let months = cutoff.month...BudgetMonth.current
+        let pageSize = 200
+        var candidates: [Transaction] = []
+        var offset = 0
+        while candidates.count < capped {
+            let page = (try? await dbQueue.read({ db -> [Transaction] in
+                try db.transactions(TransactionQuery(months: months, onlyUncategorized: true,
+                                                     limit: pageSize, offset: offset))
+            })) ?? []
+            guard !page.isEmpty else { break }
+            for transaction in page where isReviewCandidate(transaction, cutoff: cutoff)
+                && !autoFiledIDs.contains(transaction.id) {
+                candidates.append(transaction)
+                if candidates.count >= capped { break }
+            }
+            offset += page.count
+            if page.count < pageSize { break }
+        }
+
+        // One query for the whole payee-history map, built before the loop rather than per item.
+        var history: [String: String] = [:]
+        if !candidates.isEmpty {
+            history = await payeeCategoryHistory(eligible: eligible)
+        }
+
+        var items: [ReviewItem] = []
+        var aiLookups = 0
+        let aiReady = CategorySuggestionService.shared.embeddingReady
+        for transaction in candidates {
+            let name = payeeName(transaction.payeeID)
+            var proposed: String?
+            var source = ReviewSource.none
+
+            if let payeeID = transaction.payeeID, let known = history[payeeID] {
+                proposed = known
+                source = .payeeHistory
+            } else if aiReady, aiLookups < Self.reviewAILookupCap, !name.isEmpty {
+                aiLookups += 1
+                let suggestion = await CategorySuggestionService.shared
+                    .suggest(payee: name, notes: transaction.notes, limit: 1).first
+                if let suggestion, eligible.contains(suggestion.categoryID) {
+                    proposed = suggestion.categoryID
+                    source = .ai
+                }
+            }
+            items.append(ReviewItem(id: transaction.id, transaction: transaction,
+                                    payeeName: name, proposedCategoryID: proposed, source: source))
+        }
+
+        // Group: one bucket per proposed category, then the leftovers, then the spot checks.
+        var byCategory: [String: [ReviewItem]] = [:]
+        var needsCategory: [ReviewItem] = []
+        for item in items {
+            if let categoryID = item.proposedCategoryID {
+                byCategory[categoryID, default: []].append(item)
+            } else {
+                needsCategory.append(item)
+            }
+        }
+
+        var groups: [ReviewGroup] = byCategory
+            .map { categoryID, rows in
+                ReviewGroup(id: categoryID, categoryID: categoryID,
+                            title: categoryName(categoryID), kind: .suggestion, items: rows)
+            }
+            .sorted {
+                $0.items.count != $1.items.count ? $0.items.count > $1.items.count
+                                                 : $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        if !needsCategory.isEmpty {
+            groups.append(ReviewGroup(id: ReviewGroup.needsCategoryID, categoryID: nil,
+                                      title: ReviewGroup.needsCategoryTitle,
+                                      kind: .needsCategory, items: needsCategory))
+        }
+        if !autoFiledItems.isEmpty {
+            groups.append(ReviewGroup(id: ReviewGroup.autoFiledID, categoryID: nil,
+                                      title: ReviewGroup.autoFiledTitle,
+                                      kind: .autoFiled, items: autoFiledItems))
+        }
+        return groups
+    }
+
+    /// Applies categories to many transactions in ONE batch of CRDT writes (one nextTimestamps
+    /// allocation, one enqueue), the way `autoCategorizeNewArrivals` already batches. Returns the
+    /// PREVIOUS category of each transaction so the caller can offer Undo, or nil if the write
+    /// failed. Passing a nil categoryID clears the category (that is what Undo uses).
+    @discardableResult
+    func applyCategories(_ assignments: [(transactionID: String,
+                                          categoryID: String?)]) async -> [(transactionID: String,
+                                                                            categoryID: String?)]? {
+        guard !assignments.isEmpty else { return [] }
+        guard let engine else {
+            lastError = AppError(message: "Couldn't file those transactions",
+                                 detail: "No budget file is open.")
+            return nil
+        }
+
+        // Read the current values first: they are what Undo restores. Rows that can't be found
+        // are dropped rather than guessed at.
+        let rows = await transactionsByID(assignments.map { $0.transactionID })
+        var writes: [Mutations.CellWrite] = []
+        var previous: [(transactionID: String, categoryID: String?)] = []
+        for assignment in assignments {
+            guard let row = rows[assignment.transactionID] else { continue }
+            let value: CRDTValue
+            if let categoryID = assignment.categoryID {
+                value = .string(categoryID)
+            } else {
+                value = .null
+            }
+            writes += Mutations.updateFields(dataset: "transactions", id: assignment.transactionID,
+                                             fields: [(column: "category", value: value)])
+            previous.append((transactionID: assignment.transactionID, categoryID: row.categoryID))
+        }
+        guard !writes.isEmpty else { return previous }
+
+        do {
+            let timestamps = try await engine.nextTimestamps(count: writes.count)
+            guard timestamps.count == writes.count,
+                  await engine.enqueue(Mutations.messages(writes, timestamps: timestamps)) else {
+                lastError = AppError(message: "Couldn't file those transactions",
+                                     detail: "The change couldn't be written to the budget file.")
+                return nil
+            }
+        } catch {
+            lastError = AppError(message: "Couldn't file those transactions",
+                                 detail: error.localizedDescription)
+            return nil
+        }
+        // A decision was made about these, so they no longer need a spot check.
+        markReviewed(previous.map { $0.transactionID })
+        await refreshAll()
+        return previous
+    }
+
+    /// Drops these ids from the auto-filed set so they leave the queue. No CRDT write.
+    func markReviewed(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        var filed = Preferences.shared.aiAutoFiledIDs
+        var changed = false
+        for id in ids where filed.removeValue(forKey: id) != nil {
+            changed = true
+        }
+        guard changed else { return }
+        Preferences.shared.aiAutoFiledIDs = filed
+    }
+
+    /// Queue-worthy: inside the window, not a transfer, and not one of Actual's synthetic
+    /// opening-balance rows (`TransactionQuery(onlyUncategorized:)` already drops transfers,
+    /// split parents, and off-budget accounts).
+    private func isReviewCandidate(_ transaction: Transaction, cutoff: BudgetDay) -> Bool {
+        transaction.date >= cutoff
+            && transaction.transferID == nil
+            && !Self.isSyntheticPayee(payeeName(transaction.payeeID))
+    }
+
+    /// Categories a proposal may point at: real, visible, spending ones. Mirrors
+    /// `CategorySuggestionService.eligibleCategories()` and also drops income, which is never
+    /// the right answer for an imported purchase.
+    private func reviewEligibleCategoryIDs() -> Set<String> {
+        Set(categoryGroups
+            .filter { !$0.hidden && !$0.isIncome }
+            .flatMap { $0.categories.filter { !$0.hidden && !$0.isIncome } }
+            .map(\.id))
+    }
+
+    /// payee id → the category that payee is filed under most often, over the last ~180 days of
+    /// categorized, non-transfer transactions. ONE query, reduced here, built once per queue
+    /// build. Ties go to the category seen most recently (rows arrive newest-first).
+    private func payeeCategoryHistory(eligible: Set<String>) async -> [String: String] {
+        guard let dbQueue, !eligible.isEmpty else { return [:] }
+        let cutoff = BudgetDay.today.addingDays(-Self.reviewHistoryDays)
+        let query = TransactionQuery(months: cutoff.month...BudgetMonth.current, limit: 4000)
+        let rows = (try? await dbQueue.read({ db -> [Transaction] in
+            try db.transactions(query)
+        })) ?? []
+
+        var counts: [String: [String: Int]] = [:]
+        var order: [String: [String: Int]] = [:]   // first (newest) position seen, for ties
+        var index = 0
+        for transaction in rows {
+            index += 1
+            guard let payeeID = transaction.payeeID,
+                  let categoryID = transaction.categoryID,
+                  transaction.transferID == nil,
+                  transaction.date >= cutoff,
+                  eligible.contains(categoryID) else { continue }
+            counts[payeeID, default: [:]][categoryID, default: 0] += 1
+            if order[payeeID]?[categoryID] == nil {
+                order[payeeID, default: [:]][categoryID] = index
+            }
+        }
+
+        var winners: [String: String] = [:]
+        for (payeeID, tally) in counts {
+            let best = tally.max { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value < rhs.value }
+                // Same count: the more recent filing wins (lower index = newer).
+                let lhsIndex = order[payeeID]?[lhs.key] ?? Int.max
+                let rhsIndex = order[payeeID]?[rhs.key] ?? Int.max
+                return lhsIndex > rhsIndex
+            }
+            if let best { winners[payeeID] = best.key }
+        }
+        return winners
+    }
+
+    /// The spot-check bucket: rows Nidget filed on its own that still exist and still carry an
+    /// eligible category. Ids that no longer resolve (deleted, or the category was cleared since)
+    /// are pruned out of `Preferences.aiAutoFiledIDs` here rather than lingering.
+    private func autoFiledReviewItems(eligible: Set<String>) async -> [ReviewItem] {
+        let filed = Preferences.shared.aiAutoFiledIDs
+        guard !filed.isEmpty else { return [] }
+        let rows = await transactionsByID(Array(filed.keys))
+
+        var items: [ReviewItem] = []
+        var stale: [String] = []
+        for id in filed.keys {
+            guard let transaction = rows[id],
+                  let categoryID = transaction.categoryID,
+                  eligible.contains(categoryID) else {
+                stale.append(id)
+                continue
+            }
+            items.append(ReviewItem(id: id, transaction: transaction,
+                                    payeeName: payeeName(transaction.payeeID),
+                                    proposedCategoryID: categoryID, source: .autoFiled))
+        }
+        markReviewed(stale)
+        // Newest first, matching how every other list in the app reads.
+        items.sort {
+            $0.transaction.date != $1.transaction.date ? $0.transaction.date > $1.transaction.date
+                                                       : $0.id < $1.id
+        }
+        return items
+    }
+
+    /// Full rows for `ids`, read newest-first through the existing paged query and stopping as
+    /// soon as every id is found. The DB layer has no id-list query and this path must work with
+    /// no AI model installed, so it can't lean on `CategorySuggestionService`'s ledger snapshot;
+    /// review sets are recent, so in practice this resolves in the first page or two.
+    private func transactionsByID(_ ids: [String], maxRows: Int = 3000) async -> [String: Transaction] {
+        guard let dbQueue, !ids.isEmpty else { return [:] }
+        var wanted = Set(ids)
+        var found: [String: Transaction] = [:]
+        let pageSize = 500
+        var offset = 0
+        while !wanted.isEmpty && offset < maxRows {
+            let page = (try? await dbQueue.read({ db -> [Transaction] in
+                try db.transactions(TransactionQuery(limit: pageSize, offset: offset))
+            })) ?? []
+            guard !page.isEmpty else { break }
+            for transaction in page where wanted.contains(transaction.id) {
+                found[transaction.id] = transaction
+                wanted.remove(transaction.id)
+            }
+            offset += page.count
+            if page.count < pageSize { break }
+        }
+        return found
     }
 
     // MARK: - Semantic index upkeep (docs/AI.md §3)

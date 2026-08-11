@@ -184,3 +184,42 @@ therefore spends from a budget: `AppStore.autoCategorizeNewArrivals` calls
 `resetRefinementBudget(8)` before walking its (up to 50) candidates and `endRefinementBudget()`
 after, and refinement refuses once the budget hits zero. Interactive suggestions (Quick Add, one
 at a time, user watching) have no budget set and are never limited.
+
+## 7. Review queue (`AppStore.reviewQueue`, `Nidget/Features/Review/`)
+
+Bank imports happen server-side (Actual's own SimpleFIN sync), so the owner's daily job is not
+adding transactions, it is deciding what to do with the ones that showed up. The review queue is
+that decision list, grouped so a whole category can be confirmed in one tap rather than row by row.
+
+**Three sources, cheapest first.** Every candidate gets a proposal from the first source that can
+answer (`ReviewSource` on each item records which one did):
+
+1. **Payee history.** If this payee has been filed before, propose its most common category. One
+   query over the last ~180 days of categorized, non-transfer transactions, reduced to
+   `[payee id: category id]` once per queue build (never per item); ties go to the more recent
+   filing. This is first on purpose. It needs no model downloaded, which is the state the app is
+   in until the owner picks one, and for repeat spending it beats kNN outright: it is the actual
+   answer the owner gave last time, not a neighbourhood vote about it.
+2. **Embedding kNN** (`CategorySuggestionService.suggest`), only for payees with no history and
+   only when `embeddingReady`. **Capped at 25 lookups per queue build** — each lookup embeds text
+   and searches the index, so without a cap a 200-row queue would stall the screen it is opening.
+   Candidates past the cap simply fall through to the third source.
+3. **Nothing** — into the "Needs a category" group.
+
+Proposals only ever point at categories that still exist, are not hidden, and are not income (the
+same filter as `eligibleCategories()`, plus income). Candidates are uncategorized on-budget
+transactions from the last 90 days, minus transfers and Actual's synthetic "Starting Balance" rows.
+
+**Auto-filed spot checks.** `autoCategorizeNewArrivals` applies suggestions at confidence ≥ 0.75
+without asking, so the queue shows those back in a third group ("Nidget filed these", rendered
+collapsed) for a look. The ids live in `Preferences.aiAutoFiledIDs` (id → unix seconds), recorded
+only after the enqueue actually lands. That map is **local only** — it is Nidget's own bookkeeping,
+has no column on Actual's server, is never written into a CRDT message, and never syncs, exactly
+like `categoryIcons` and the embedding index. It is **pruned at 30 days** (`pruneAutoFiled()`, run
+at the start of every `reviewQueue`) and whenever an entry is confirmed, so it stays small.
+
+**Costs.** `reviewCount()` is the badge/widget number (uncategorized in the window plus unconfirmed
+auto-filed) and does one query, no AI, no payee map. `applyCategories(_:)` writes many category
+changes as ONE batch — one `nextTimestamps` allocation, one `enqueue` — and returns each
+transaction's previous category so the caller can offer Undo; passing a nil category clears it,
+which is what Undo sends back.

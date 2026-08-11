@@ -32,6 +32,7 @@ final class Preferences {
         static let aiQuickAddSuggestions = "nidget.pref.aiQuickAddSuggestions"
         static let aiAutoCategorize = "nidget.pref.aiAutoCategorize"
         static let categoryIconsJSON = "nidget.pref.categoryIconsJSON"
+        static let aiAutoFiledIDsJSON = "nidget.pref.aiAutoFiledIDs"
     }
 
     /// Serialized `[DashboardItem]` (Features/Dashboard). Empty string = use the default layout.
@@ -150,6 +151,21 @@ final class Preferences {
         }
     }
 
+    /// Transaction ids the AI categorized on its own, with when (unix seconds), awaiting the
+    /// owner's spot check. Local only: this is Nidget's own bookkeeping, it has no column on
+    /// Actual's server and is never written into a CRDT message, exactly like `categoryIcons`.
+    /// The review queue reads it to offer those transactions back for a look. Pruned after 30
+    /// days and whenever one is confirmed, so it stays small. Persisted as one JSON string.
+    var aiAutoFiledIDs: [String: Double] {
+        didSet {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(aiAutoFiledIDs),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            UserDefaults.standard.set(json, forKey: Key.aiAutoFiledIDsJSON)
+        }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         dashboardLayoutJSON = defaults.string(forKey: Key.dashboardLayoutJSON) ?? ""
@@ -170,6 +186,7 @@ final class Preferences {
         aiQuickAddSuggestions = defaults.object(forKey: Key.aiQuickAddSuggestions) as? Bool ?? true
         aiAutoCategorize = defaults.bool(forKey: Key.aiAutoCategorize)
         categoryIcons = Self.decodeIcons(defaults.string(forKey: Key.categoryIconsJSON))
+        aiAutoFiledIDs = Self.decodeAutoFiled(defaults.string(forKey: Key.aiAutoFiledIDsJSON))
         // didSet does not run during init — push the loaded value explicitly.
         CurrencyFormatter.currencyCode = currencyCode
     }
@@ -188,6 +205,30 @@ final class Preferences {
         } else {
             categoryIcons.removeValue(forKey: id)
         }
+    }
+
+    // MARK: Auto-filed transactions
+
+    /// Forgets auto-filed entries older than `days`. An unreviewed spot check stops being worth
+    /// showing after a month, and this keeps the stored map from growing forever. Only assigns
+    /// when something actually goes, so the common case writes nothing.
+    func pruneAutoFiled(olderThan days: Double = 30) {
+        guard !aiAutoFiledIDs.isEmpty else { return }
+        let cutoff = Date().timeIntervalSince1970 - max(0, days) * 86_400
+        let kept = aiAutoFiledIDs.filter { $0.value >= cutoff }
+        guard kept.count != aiAutoFiledIDs.count else { return }
+        aiAutoFiledIDs = kept
+    }
+
+    /// Stored JSON → auto-filed ids. Same defensive rule as the icons: a missing, empty, or
+    /// corrupt value means "none", never a crash on launch.
+    private static func decodeAutoFiled(_ json: String?) -> [String: Double] {
+        guard let json, !json.isEmpty,
+              let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: Double].self, from: data) else {
+            return [:]
+        }
+        return decoded
     }
 
     /// Stored JSON → icons. A missing, empty, or corrupt value yields no icons rather than
