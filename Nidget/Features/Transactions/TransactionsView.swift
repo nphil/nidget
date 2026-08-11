@@ -366,7 +366,7 @@ struct TransactionsView: View {
             } else {
                 EmptyStateView(systemImage: "sparkles",
                                title: "A fresh ledger",
-                               message: "Nothing logged yet. Tap the plus button and give this budget its first heartbeat.",
+                               message: "Nothing logged yet. Tap Add transaction at the bottom and give this budget its first heartbeat.",
                                actionTitle: "Add Transaction",
                                action: { router.quickAddPresented = true })
             }

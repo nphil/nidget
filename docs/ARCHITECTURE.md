@@ -482,13 +482,17 @@ enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire
   func openAccount(_ id: String); func openReports(); func openTransactions(filter: TransactionQuery)
 }
 ```
-RootView: `TabView` with the 5 tabs (iOS 26 `Tab` API), `.tint(theme.palette.accent)`; a
-**floating Quick Add button** overlays the tab bar area on dashboard/budget/transactions tabs
-(bottom-trailing, 56pt, accent circle w/ theme card treatment, `Haptics.tap`, opens
-`router.quickAddPresented` sheet with `.presentationDetents([.height(560), .large])`). It shows
-only while that tab is at its root — `AppRouter.isAtRoot(of:)` — so it fades out over pushed
-sub-screens (Manage Categories, account detail, Reports, Theme Gallery, Intelligence, Guide)
-and fades back in on pop.
+RootView: `TabView` with the 5 tabs (iOS 26 `Tab` API), `.tint(theme.palette.accent)`,
+`.tabBarMinimizeBehavior(.onScrollDown)`; the **Quick Add tab bar accessory** rides the tab bar
+via `.tabViewBottomAccessory { }` — a full-width row (accent `plus.circle` + "Add transaction",
+min height 44, `Haptics.tap`) that opens the `router.quickAddPresented` sheet with
+`.presentationDetents([.height(560), .large])`. It draws no background of its own: the accessory
+slot already renders the bar's glass, so a second `.glassEffect()` inside it would double the
+material. The system insets scrollable content for the accessory, so unlike the old floating
+button it can never cover a list row. The modifier stays applied on every screen and the content
+is `EmptyView` outside dashboard/budget/transactions or while that tab has anything pushed
+(`AppRouter.isAtRoot(of:)`) — emptying the content rather than dropping the modifier keeps the
+TabView's identity, and therefore the tab stacks' state, stable across pushes and pops.
 Also hosts: sync status pill (top, appears during sync / offline with pending count), error toast,
 privacy-mode blur when app resigns active (`scenePhase`), `AppLockScreen` gate when
 `Preferences.biometricLock` (LocalAuthentication, `.faceID`; locks on background, 8s grace).
@@ -589,7 +593,7 @@ enum Route: Hashable {
   var quickAddPresented = false
   var pendingTransactionFilter: TransactionQuery?   // consumed by TransactionsView .task(id:)
   func push(_ route: Route)                         // appends to the CURRENT tab's path
-  func isAtRoot(of tab: AppTab) -> Bool             // that tab's path is empty (gates the Quick Add FAB)
+  func isAtRoot(of tab: AppTab) -> Bool             // that tab's path is empty (gates the Quick Add accessory)
   func openAccount(_ id: String)                    // push(.account(id))
   func openReports()                                // push(.reports)
   func openTransactions(filter: TransactionQuery)   // set pendingTransactionFilter, tab = .transactions

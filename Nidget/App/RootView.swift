@@ -27,7 +27,7 @@ struct RootView: View {
 
 // MARK: - RootContentView
 //
-// Switches on AppStore.setup and hosts the global overlays: the floating Quick Add button,
+// Switches on AppStore.setup and hosts the app frame: the tab bar with its Quick Add accessory,
 // the sync status pill, the error toast, the app lock gate, and the privacy blur.
 
 private struct RootContentView: View {
@@ -107,7 +107,15 @@ private struct RootContentView: View {
         }
         .tint(theme.palette.accent)
         .modifier(TabChromeModifier(chrome: theme.effects.chrome, surface: theme.palette.surface))
-        .overlay(alignment: .bottomTrailing) { quickAddOverlay }
+        .tabBarMinimizeBehavior(.onScrollDown)
+        .tabViewBottomAccessory {
+            if showsQuickAdd {
+                QuickAddAccessoryRow {
+                    Haptics.tap()
+                    router.quickAddPresented = true
+                }
+            }
+        }
         .overlay(alignment: .top) { syncStatusOverlay }
         .overlay(alignment: .bottom) { errorToastOverlay }
         .sheet(isPresented: $router.quickAddPresented) {
@@ -138,31 +146,21 @@ private struct RootContentView: View {
         }
     }
 
-    // MARK: Quick Add floating button
+    // MARK: Quick Add accessory
     //
     // Top-level screens only. It belongs to the three tabs where adding a transaction is the
     // obvious next thing, and only while they're showing their own root — pushing Manage
     // Categories, an account, Reports or the Guide takes it away, and popping back brings it
     // straight back. `isAtRoot(of:)` reads just the frontmost tab's path, so a push in a
     // background tab doesn't touch this.
+    //
+    // The `.tabViewBottomAccessory` modifier stays applied on every screen and this flag empties
+    // its content instead of removing the modifier: a conditional modifier would put the TabView
+    // in a different branch of the view tree on each push and pop, which throws away the tab
+    // stacks' state.
 
     private var showsQuickAdd: Bool {
         Self.quickAddTabs.contains(router.tab) && router.isAtRoot(of: router.tab)
-    }
-
-    @ViewBuilder
-    private var quickAddOverlay: some View {
-        ZStack {
-            if showsQuickAdd {
-                QuickAddFloatingButton {
-                    router.quickAddPresented = true
-                }
-                .transition(.scale(scale: 0.5).combined(with: .opacity))
-            }
-        }
-        .animation(reduceMotion ? nil : theme.motion.spring, value: showsQuickAdd)
-        .padding(.trailing, theme.layout.spacing + 8)
-        .padding(.bottom, 68)
     }
 
     // MARK: Sync status pill
@@ -252,41 +250,39 @@ private struct TabChromeModifier: ViewModifier {
     }
 }
 
-// MARK: - QuickAddFloatingButton
+// MARK: - QuickAddAccessoryRow
 //
-// 56pt accent circle with a plus, floating above the tab bar. Press feedback + Haptics.tap
-// come from PressableButtonStyle (same treatment as NidgetButton).
+// The Quick Add control, living in the tab bar's bottom accessory slot. It rides the bar's own
+// glass, morphs with it, and the system insets scrollable content for it, so it can never sit on
+// top of a list row the way the old floating button did.
+//
+// The row draws no background of its own on purpose: the accessory slot already renders the tab
+// bar's material, and a `.glassEffect()` or `GlassEffectContainer` inside it would stack a second
+// layer of glass over the first.
 
-private struct QuickAddFloatingButton: View {
+private struct QuickAddAccessoryRow: View {
     let action: () -> Void
 
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "plus")
-                .font(theme.font(.title))
-                .fontWeight(theme.icons.weight)
-                .symbolVariant(theme.icons.fill ? .fill : .none)
-                .foregroundStyle(theme.palette.onAccent)
-                .frame(width: 56, height: 56)
-                .background {
-                    Circle()
-                        .fill(theme.palette.accent)
-                        .shadow(color: theme.effects.shadow?.color ?? .clear,
-                                radius: theme.effects.shadow?.radius ?? 0,
-                                x: theme.effects.shadow?.x ?? 0,
-                                y: theme.effects.shadow?.y ?? 0)
-                        .shadow(color: theme.effects.glowAccents ? theme.palette.accent.opacity(0.5) : .clear,
-                                radius: theme.effects.glowAccents ? 12 : 0,
-                                x: 0,
-                                y: theme.effects.glowAccents ? 4 : 0)
-                }
-                .contentShape(Circle())
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle")
+                    .font(theme.font(.body))
+                    .fontWeight(theme.icons.weight)
+                    .symbolVariant(theme.icons.fill ? .fill : .none)
+                    .foregroundStyle(theme.palette.accent)
+                Text("Add transaction")
+                    .font(theme.font(.subheadline))
+                    .foregroundStyle(theme.palette.textPrimary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(PressableButtonStyle(pressAnimation: reduceMotion ? nil : theme.motion.snappy))
+        .buttonStyle(.plain)
         .accessibilityLabel("Add transaction")
+        .accessibilityHint("Opens Quick Add")
     }
 }
 

@@ -209,12 +209,12 @@ struct GuideQuickAddPage: View {
     var body: some View {
         GuidePage(
             title: "Log spending in seconds",
-            text: "The + button opens Quick Add: amount, payee, done. Nidget learns your payees and fills in the category next time. The little check means your bank confirmed that transaction. A lock means it is reconciled and settled."
+            text: "Add transaction on the bar at the bottom opens Quick Add: amount, payee, done. Nidget learns your payees and fills in the category next time. The little check means your bank confirmed that transaction. A lock means it is reconciled and settled."
         ) {
             VStack(spacing: theme.layout.spacing) {
                 HStack(spacing: theme.layout.spacing) {
-                    plusButton
-                        .guideSpotlight(cornerRadius: 30, inset: 6)
+                    addTransactionBar
+                        .guideSpotlight(cornerRadius: 18, inset: 5)
                     Image(systemName: "arrow.right")
                         .font(theme.font(.caption))
                         .fontWeight(theme.icons.weight)
@@ -229,19 +229,27 @@ struct GuideQuickAddPage: View {
         }
     }
 
-    private var plusButton: some View {
-        Image(systemName: "plus")
-            .font(theme.font(.title))
-            .fontWeight(theme.icons.weight)
-            .symbolVariant(theme.icons.fill ? .fill : .none)
-            .foregroundStyle(theme.palette.onAccent)
-            .frame(width: 52, height: 52)
-            .background {
-                Circle()
-                    .fill(theme.palette.accent)
-                    .shadow(color: theme.effects.glowAccents ? theme.palette.accent.opacity(0.5) : .clear,
-                            radius: theme.effects.glowAccents ? 10 : 0)
-            }
+    /// A miniature of the Quick Add row the tab bar carries at the bottom of the app.
+    private var addTransactionBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus.circle")
+                .font(theme.font(.subheadline))
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(theme.icons.fill ? .fill : .none)
+                .foregroundStyle(theme.palette.accent)
+            Text("Add transaction")
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, minHeight: 38)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(theme.palette.surface)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(theme.palette.surfaceBorder, lineWidth: 1))
+        }
     }
 
     private var keypadCard: some View {

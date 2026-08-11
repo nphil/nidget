@@ -48,6 +48,10 @@ respected on all page visuals.
 
 **Maintenance rule (also in CLAUDE.md): every future feature change updates its page.**
 
+Superseded 2026-08-10: the floating + button is gone. Quick Add now lives in the tab bar's
+bottom accessory as a full-width "Add transaction" row, so page 3's copy and its mock show that
+row instead of a circular button.
+
 ## 2. Retirement planner overhaul — `Nidget/Features/Retirement/`
 
 Reframe around the owner's actual question: "how far from retirement am I, and how does my
