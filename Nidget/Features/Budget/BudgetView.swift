@@ -22,6 +22,7 @@ import Foundation
 struct BudgetView: View {
     @Environment(AppStore.self) private var store
     @Environment(AppRouter.self) private var router
+    @Environment(Preferences.self) private var preferences
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -337,24 +338,61 @@ struct BudgetView: View {
     }
 
     private func categoryRowItem(_ row: BudgetRowSnapshot) -> some View {
-        CategoryRow(row: row,
-                   onEditBudgeted: { editingRow = row },
-                   onTapSpent: { openSpentTransactions(row) })
-            .listRowBackground(Color.clear)
-            .listRowSeparatorTint(theme.palette.separator)
-            .listRowInsets(rowInsets)
-            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                Button {
-                    Haptics.tick()
-                    moveMoneyTarget = MoveMoneyTarget(categoryID: row.id)
-                } label: {
-                    Label("Move", systemImage: "arrow.left.arrow.right")
-                }
-                .tint(theme.palette.accent)
+        HStack(alignment: .top, spacing: theme.layout.spacing * 0.6) {
+            if showsCategoryIcons {
+                // CategoryRow pads itself 2pt vertically; match it so the glyph sits on the
+                // name's line rather than floating over the progress bar.
+                categoryIcon(row.id)
+                    .padding(.top, 2)
             }
-            .contextMenu {
-                categoryRowContextMenu(row)
+            CategoryRow(row: row,
+                        onEditBudgeted: { editingRow = row },
+                        onTapSpent: { openSpentTransactions(row) })
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(theme.palette.separator)
+        .listRowInsets(rowInsets)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button {
+                Haptics.tick()
+                moveMoneyTarget = MoveMoneyTarget(categoryID: row.id)
+            } label: {
+                Label("Move", systemImage: "arrow.left.arrow.right")
             }
+            .tint(theme.palette.accent)
+        }
+        .contextMenu {
+            categoryRowContextMenu(row)
+        }
+    }
+
+    // MARK: Category icons
+    //
+    // Icons are local-only (`Preferences.categoryIcons`, never synced — Actual's server has no
+    // icon column) and are chosen in CategoryEditorSheet or Manage Categories. The leading slot
+    // only appears once at least one category has an icon, so a budget that never uses them
+    // keeps exactly the layout it had, and one that does keeps every name aligned. Cost per row
+    // is a dictionary lookup and one Image: no geometry reads, nothing on the scroll hot path
+    // (LESSONS_FROM_STASHY §1).
+
+    private var showsCategoryIcons: Bool {
+        !preferences.categoryIcons.isEmpty
+    }
+
+    @ViewBuilder
+    private func categoryIcon(_ categoryID: String) -> some View {
+        if let symbol = preferences.icon(forCategory: categoryID) {
+            Image(systemName: symbol)
+                .font(theme.font(.subheadline))
+                .fontWeight(theme.icons.weight)
+                .foregroundStyle(theme.palette.textSecondary)
+                .frame(width: 22, height: 44)
+                .accessibilityHidden(true)
+        } else {
+            Color.clear
+                .frame(width: 22, height: 1)
+                .accessibilityHidden(true)
+        }
     }
 
     private func openSpentTransactions(_ row: BudgetRowSnapshot) {
@@ -451,7 +489,10 @@ struct BudgetView: View {
     }
 
     private func incomeCategoryRow(_ category: Category) -> some View {
-        HStack {
+        HStack(spacing: theme.layout.spacing * 0.6) {
+            if showsCategoryIcons {
+                categoryIcon(category.id)
+            }
             Text(category.name)
                 .font(theme.font(.body))
                 .foregroundStyle(theme.palette.textPrimary)

@@ -20,14 +20,23 @@ import SwiftUI
 // still here and still useful, but nobody finds a long press: with Edit on, every group and
 // category row taps straight into its rename sheet, each group grows an "Add category" row, and
 // the list ends with "New group". Everything in this screen's job is then visible at once.
+//
+// Every category row also leads with its icon (`Preferences.categoryIcons`, local-only). OUTSIDE
+// edit mode that glyph is its own button straight into `IconPickerSheet` — the fast way to dress
+// up a budget that already exists. INSIDE edit mode it goes back to being a plain glyph, because
+// the row itself is already the rename button there and a `List` in `.editMode` is not a place to
+// rely on a nested control still receiving taps; the rename sheet carries the same icon button,
+// so nothing is out of reach. The context menu offers "Change Icon" in both modes.
 
 struct ManageCategoriesView: View {
     @Environment(AppStore.self) private var store
+    @Environment(Preferences.self) private var preferences
     @Environment(\.theme) private var theme
     @Environment(\.editMode) private var editMode
 
     @State private var categoryEditor: CategoryEditorMode?
     @State private var deleteTarget: Category?
+    @State private var iconTarget: Category?
 
     init() {}
 
@@ -53,6 +62,9 @@ struct ManageCategoriesView: View {
                 DeleteCategorySheet(category: category)
                     .presentationDetents([.height(420), .large])
                     .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $iconTarget) { category in
+                IconPickerSheet(symbol: iconBinding(for: category), categoryName: category.name)
             }
     }
 
@@ -213,6 +225,7 @@ struct ManageCategoriesView: View {
 
     private func categoryRowLabel(_ category: Category) -> some View {
         HStack(spacing: 6) {
+            categoryIcon(category)
             Text(category.name)
                 .font(theme.font(.body))
                 .foregroundStyle(category.hidden ? theme.palette.textTertiary : theme.palette.textPrimary)
@@ -224,6 +237,46 @@ struct ManageCategoriesView: View {
         }
         .frame(minHeight: 44)
         .contentShape(Rectangle())
+    }
+
+    // MARK: Icons
+    //
+    // Local-only category icons (`Preferences.categoryIcons`). Unset categories show the catalog's
+    // placeholder dimmed rather than a gap: this is the screen where icons get set, so the empty
+    // slot is the affordance.
+
+    @ViewBuilder
+    private func categoryIcon(_ category: Category) -> some View {
+        if isEditing {
+            categoryIconGlyph(category)
+        } else {
+            Button {
+                Haptics.tap()
+                iconTarget = category
+            } label: {
+                categoryIconGlyph(category)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Icon for \(category.name)")
+            .accessibilityHint("Double-tap to choose an icon")
+        }
+    }
+
+    private func categoryIconGlyph(_ category: Category) -> some View {
+        let symbol = preferences.icon(forCategory: category.id)
+        return Image(systemName: symbol ?? CategoryIconCatalog.fallback)
+            .font(theme.font(.body))
+            .fontWeight(theme.icons.weight)
+            .foregroundStyle(symbol == nil ? theme.palette.textTertiary : theme.palette.accent)
+            .frame(width: 40, height: 44)
+    }
+
+    /// Writes straight through to Preferences — icons never touch a store mutation, because
+    /// Actual's server has no icon column to sync them to.
+    private func iconBinding(for category: Category) -> Binding<String?> {
+        Binding(get: { preferences.icon(forCategory: category.id) },
+                set: { preferences.setIcon($0, forCategory: category.id) })
     }
 
     // MARK: Edit-mode add rows
@@ -282,6 +335,12 @@ struct ManageCategoriesView: View {
             categoryEditor = .rename(id: category.id, currentName: category.name, isGroup: false)
         } label: {
             Label("Rename", systemImage: "pencil")
+        }
+        Button {
+            Haptics.tap()
+            iconTarget = category
+        } label: {
+            Label("Change Icon", systemImage: "square.grid.2x2")
         }
         Button {
             Task { await toggleHidden(category) }

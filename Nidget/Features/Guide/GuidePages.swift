@@ -135,7 +135,7 @@ struct GuideBudgetPage: View {
     var body: some View {
         GuidePage(
             title: "The Budget screen",
-            text: "The month you are looking at sits right at the top. Tap it to jump to another one, or use the little arrows beside it. Tap the budgeted amount to fill an envelope. Spent is what left this month, and the balance pill is what remains. A red balance just means that envelope ran dry. Swipe the row and move some money over from another one, no guilt required."
+            text: "The month you are looking at sits right at the top. Tap it to jump to another one, or use the little arrows beside it. Tap the budgeted amount to fill an envelope. Spent is what left this month, and the balance pill is what remains. A red balance just means that envelope ran dry. Swipe the row and move some money over from another one, no guilt required. Each category can wear a small icon, which you pick when you make it or rename it later."
         ) {
             VStack(spacing: theme.layout.spacing * 0.5) {
                 mockRow
@@ -148,6 +148,11 @@ struct GuideBudgetPage: View {
     private var mockRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
+                // The leading category icon, drawn exactly as BudgetView draws it.
+                Image(systemName: "cart.fill")
+                    .font(theme.font(.subheadline))
+                    .fontWeight(theme.icons.weight)
+                    .foregroundStyle(theme.palette.textSecondary)
                 Text("Groceries")
                     .font(theme.font(.body))
                     .foregroundStyle(theme.palette.textPrimary)

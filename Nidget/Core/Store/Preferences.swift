@@ -30,6 +30,7 @@ final class Preferences {
         static let aiSemanticSearch = "nidget.pref.aiSemanticSearch"
         static let aiQuickAddSuggestions = "nidget.pref.aiQuickAddSuggestions"
         static let aiAutoCategorize = "nidget.pref.aiAutoCategorize"
+        static let categoryIconsJSON = "nidget.pref.categoryIconsJSON"
     }
 
     /// Serialized `[DashboardItem]` (Features/Dashboard). Empty string = use the default layout.
@@ -128,6 +129,20 @@ final class Preferences {
         didSet { UserDefaults.standard.set(aiAutoCategorize, forKey: Key.aiAutoCategorize) }
     }
 
+    /// Category id -> SF Symbol name (`CategoryIconCatalog`). Local only: Actual's server has no
+    /// icon column on categories (PROTOCOL §categories), so these are never written into a CRDT
+    /// message and never sync — they ride along in an iOS device backup and nothing else, the
+    /// same rule the AI embedding index follows. Persisted as one JSON string.
+    var categoryIcons: [String: String] {
+        didSet {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(categoryIcons),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            UserDefaults.standard.set(json, forKey: Key.categoryIconsJSON)
+        }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         dashboardLayoutJSON = defaults.string(forKey: Key.dashboardLayoutJSON) ?? ""
@@ -146,7 +161,35 @@ final class Preferences {
         aiSemanticSearch = defaults.object(forKey: Key.aiSemanticSearch) as? Bool ?? true
         aiQuickAddSuggestions = defaults.object(forKey: Key.aiQuickAddSuggestions) as? Bool ?? true
         aiAutoCategorize = defaults.bool(forKey: Key.aiAutoCategorize)
+        categoryIcons = Self.decodeIcons(defaults.string(forKey: Key.categoryIconsJSON))
         // didSet does not run during init — push the loaded value explicitly.
         CurrencyFormatter.currencyCode = currencyCode
+    }
+
+    // MARK: Category icons
+
+    /// The symbol chosen for a category, or nil when it has none.
+    func icon(forCategory id: String) -> String? {
+        categoryIcons[id]
+    }
+
+    /// Sets a category's symbol; nil (or an empty name) removes the entry entirely.
+    func setIcon(_ symbol: String?, forCategory id: String) {
+        if let symbol, !symbol.isEmpty {
+            categoryIcons[id] = symbol
+        } else {
+            categoryIcons.removeValue(forKey: id)
+        }
+    }
+
+    /// Stored JSON → icons. A missing, empty, or corrupt value yields no icons rather than
+    /// throwing: a bad string must never keep the app from launching.
+    private static func decodeIcons(_ json: String?) -> [String: String] {
+        guard let json, !json.isEmpty,
+              let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return decoded
     }
 }

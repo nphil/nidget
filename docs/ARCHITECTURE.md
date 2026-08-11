@@ -390,7 +390,9 @@ flag; To Budget = available income − budgeted, cumulative).
 `Preferences.swift`: `@MainActor @Observable final class Preferences` (UserDefaults-backed):
 `dashboardLayoutJSON: String`, `currencyCode: String` (didSet must also update
 `CurrencyFormatter.currencyCode`), `biometricLock: Bool`, `privacyModeDefault: Bool`,
-`retirementConfigJSON: String`, `defaultAccountID: String?`, plus `static let shared`.
+`retirementConfigJSON: String`, `defaultAccountID: String?`, `categoryIcons: [String: String]`
+(category id → SF Symbol, persisted as JSON under `nidget.pref.categoryIconsJSON`; see §14), plus
+`static let shared`.
 NOTE: theme selection is NOT here — `ThemeManager` (already written) owns its own persistence.
 
 `KeychainStore.swift`: `enum KeychainStore { static func set(_ value: String, key: String);
@@ -524,6 +526,19 @@ category including hidden ones, one Section per group, per-`ForEach` `.onMove` r
 context menus for rename / hide / move / delete. With `EditButton` on, naming becomes first-class:
 tapping any group header or category row opens its rename sheet, each group gains an inline "Add
 category" row, and the list ends with "New group".
+
+**Category icons** (local only): a category may carry one SF Symbol, drawn leading in its Budget
+row and its Manage Categories row. The curated symbol set plus `search(_:)`,
+`suggested(forCategoryName:)` and `fallback` live in `DesignSystem/CategoryIconCatalog.swift`; the
+grid is `Features/Budget/IconPickerSheet.swift`, opened from `CategoryEditorSheet` (new category
+and rename-category, never groups) or straight from a Manage Categories row outside edit mode.
+Storage is `Preferences.categoryIcons` — `[category id: symbol name]` persisted as a JSON string
+under `nidget.pref.categoryIconsJSON`, decoded defensively (corrupt = `[:]`). Actual's server has
+NO icon column on `categories` (PROTOCOL: `id, name, is_income, cat_group, sort_order, tombstone,
+hidden, goal_def, cleanup_def, template_settings`), so icons are deliberately never written into a
+CRDT message and never sync — same local-only rule as the AI embedding index. A new category's
+icon is guessed from its name until the user picks one by hand. Budget shows the leading icon slot
+only once at least one category has an icon; Manage Categories always shows it, dimmed when unset.
 
 **Transactions** (`TransactionsView`): searchable list (`.searchable`), grouped by day
 (SectionHeader with relative dates), rows: payee, category chip, notes line, AmountText, cleared
