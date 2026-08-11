@@ -451,7 +451,8 @@ off-main (`Task.detached(priority: .userInitiated)`).
 ```swift
 enum WidgetKind: String, Codable, CaseIterable, Identifiable {
   case toBudget, netWorth, spendingRing, accountsList, recentActivity, cashFlow,
-       savingsRate, fiProgress, monthProgress, spendHeatmap, quickAdd, topCategories
+       savingsRate, fiProgress, monthProgress, spendHeatmap, quickAdd, topCategories,
+       needsReview
   var id: String { rawValue }
   var displayName: String  ; var systemImage: String
   var allowedSpans: [WidgetSpan] ; var defaultSpan: WidgetSpan
@@ -555,6 +556,30 @@ Toggle); deep-linked category/payee/month filters show a clearable chip above th
 delete / edit / toggle cleared. Infinite scroll paging (100/page). Tap row → `TransactionDetailView`
 (editable form reusing QuickAdd pieces). Pull-to-refresh triggers `syncNow`.
 
+**Review** (`ReviewView`, pushed via `Route.review`, no NavigationStack of its own): the daily
+triage screen. The owner's server auto-imports from SimpleFIN, so the everyday job is triaging what
+arrived rather than typing transactions in. `AppStore.reviewQueue(limit:)` returns `[ReviewGroup]`
+(`kind`: `.suggestion` / `.needsCategory` / `.autoFiled`, each holding `[ReviewItem]` with a
+`proposedCategoryID` and a `ReviewSource` of `.payeeHistory` / `.ai` / `.autoFiled` / `.none`).
+Rendered as themed cards, top to bottom: a count line ("6 need a decision"); one card per
+suggestion group with more than one item (proposed category, source glyph and blurb, count pill,
+rows, and a full-width "Accept all N"); a single pooled card holding every ONE-item suggestion as
+plain rows with their own "Accept" button (a one-item group never shows "Accept all 1" — on a
+normal day most groups have one item, and a stack of group boxes around single rows is ceremony);
+a "Needs a category" card; and "Nidget filed these", collapsed behind a disclosure row, for
+spot-checking (each row confirms via `markReviewed` or re-categorizes). Tapping any row anywhere
+opens `CategoryPickerSheet` for that one transaction. Empty queue = `EmptyStateView` ("All caught
+up."). Swiping a row horizontally skips it for the session only (never persisted); pull-to-refresh
+reloads.
+
+Every accept, bulk or single, is ONE batched `applyCategories` call. It returns the previous
+`(transactionID, categoryID)` pairs, which an in-screen undo banner ("Filed 12 as Groceries" +
+Undo) replays through the same call; the banner is local to the screen, not a global toast, and
+auto-dismisses after ~6s via a `.task(id:)` keyed on the banner's identity so a new accept restarts
+the countdown. Entry points: the `needsReview` dashboard widget (`ReviewWidget`, count headline via
+`store.reviewCount()`, calm "All caught up" at zero) and a badged toolbar button on Transactions,
+both pushing `Route.review`.
+
 **QuickAdd** (`QuickAddView`) — the crown jewel, ≤3 actions: opens with keypad focused, big
 AmountText hero that ticks with `.numericText()`; sign toggle (expense default); payee field with
 live `suggestions()` (recent/frequent, shows last amount + auto-category); category auto-fills from
@@ -612,7 +637,7 @@ each theme's tokens), sectioned Light/Dark, tap = apply + `Haptics.success`; cur
 ```swift
 enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire, settings }
 enum Route: Hashable {
-  case accounts, account(String), reports, transactionDetail(String),
+  case accounts, account(String), reports, transactionDetail(String), review,
        themeGallery, securitySettings, retirementAssumptions
 }
 @MainActor @Observable final class AppRouter {
@@ -634,7 +659,7 @@ and applies `.withRouteDestinations()` — a modifier declared in AppRouter.swif
 `navigationDestination(for: Route.self)` maps: `.accounts → AccountsView()`,
 `.account(id) → AccountDetailView(accountID: id)`, `.reports → ReportsView()`,
 `.transactionDetail(id) → TransactionDetailView(transactionID: id)`,
-`.themeGallery → ThemeGalleryView()`,
+`.review → ReviewView()`, `.themeGallery → ThemeGalleryView()`,
 `.securitySettings → SecuritySettingsView()`, `.retirementAssumptions → AssumptionsSheet()`.
 Those view names + init signatures are therefore BINDING on their owning agents.
 `QuickAddView()` takes no arguments and is presented as a sheet by RootView.

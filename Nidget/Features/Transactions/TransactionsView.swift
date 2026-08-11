@@ -49,6 +49,10 @@ struct TransactionsView: View {
     @State private var relatedTransactions: [Transaction] = []
     @State private var isLoadingRelated = false
 
+    /// Badge on the toolbar's Review button: how many imported transactions still need a
+    /// category. Refreshed with the list and again whenever Review is popped off this stack.
+    @State private var reviewCount = 0
+
     private static let batchSize = 100
 
     init() {}
@@ -70,9 +74,13 @@ struct TransactionsView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    reviewButton
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     filterMenu
                 }
             }
+            .task(id: store.accounts) { await refreshReviewCount() }
             .searchable(text: $searchText,
                         placement: .navigationBarDrawer(displayMode: .automatic),
                         prompt: "Payee or notes")
@@ -90,7 +98,10 @@ struct TransactionsView: View {
             }
             .onChange(of: router.transactionsPath.count) { oldCount, newCount in
                 if newCount < oldCount {
-                    Task { await reload(preservingDepth: true) }
+                    Task {
+                        await reload(preservingDepth: true)
+                        await refreshReviewCount()
+                    }
                 }
             }
             .confirmationDialog("Delete this transaction?",
@@ -102,6 +113,56 @@ struct TransactionsView: View {
             } message: { transaction in
                 Text(deleteMessage(for: transaction))
             }
+    }
+
+    // MARK: Review
+    //
+    // A second toolbar button, left of the filter menu so the two never crowd each other. It only
+    // wears its badge and accent when something is actually waiting; at zero it is a quiet glyph.
+
+    private var reviewButton: some View {
+        Button {
+            Haptics.tap()
+            router.push(.review)
+        } label: {
+            Image(systemName: "tray.full")
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(reviewCount > 0 ? .fill : (theme.icons.fill ? .fill : .none))
+                .foregroundStyle(reviewCount > 0 ? theme.palette.accent : theme.palette.textSecondary)
+                .overlay(alignment: .topTrailing) { reviewBadge }
+        }
+        .accessibilityLabel(reviewButtonLabel)
+    }
+
+    @ViewBuilder
+    private var reviewBadge: some View {
+        if reviewCount > 0 {
+            Text(reviewCount > 99 ? "99+" : "\(reviewCount)")
+                .font(theme.font(.label))
+                .fontWeight(.bold)
+                .monospacedDigit()
+                .foregroundStyle(theme.palette.onAccent)
+                .lineLimit(1)
+                .padding(.horizontal, 4)
+                .frame(minWidth: 16, minHeight: 16)
+                .background(Capsule().fill(theme.palette.accent))
+                .offset(x: 10, y: -9)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var reviewButtonLabel: String {
+        switch reviewCount {
+        case 0: return "Review"
+        case 1: return "Review, 1 waiting"
+        default: return "Review, \(reviewCount) waiting"
+        }
+    }
+
+    private func refreshReviewCount() async {
+        let value = await store.reviewCount()
+        guard !Task.isCancelled else { return }
+        reviewCount = value
     }
 
     // MARK: Filters

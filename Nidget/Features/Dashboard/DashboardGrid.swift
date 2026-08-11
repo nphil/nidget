@@ -438,6 +438,7 @@ struct WidgetTileContent: View {
         case .spendHeatmap: SpendHeatmapWidget(span: item.span)
         case .quickAdd: QuickAddWidget(span: item.span)
         case .topCategories: TopCategoriesWidget(span: item.span)
+        case .needsReview: ReviewWidget(span: item.span)
         }
     }
 }

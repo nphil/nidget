@@ -9,7 +9,8 @@ import os
 
 enum WidgetKind: String, Codable, CaseIterable, Identifiable {
     case toBudget, netWorth, spendingRing, accountsList, recentActivity, cashFlow,
-         savingsRate, fiProgress, monthProgress, spendHeatmap, quickAdd, topCategories
+         savingsRate, fiProgress, monthProgress, spendHeatmap, quickAdd, topCategories,
+         needsReview
 
     var id: String { rawValue }
 
@@ -27,6 +28,7 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .spendHeatmap: return "Spend Heatmap"
         case .quickAdd: return "Quick Add"
         case .topCategories: return "Top Categories"
+        case .needsReview: return "Needs Review"
         }
     }
 
@@ -44,6 +46,7 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .spendHeatmap: return "square.grid.3x3"
         case .quickAdd: return "plus.circle"
         case .topCategories: return "chart.bar"
+        case .needsReview: return "tray.full"
         }
     }
 
@@ -62,6 +65,7 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .spendHeatmap: return [.s2x1, .s2x2]
         case .quickAdd: return [.s1x1]
         case .topCategories: return [.s1x1, .s2x1, .s2x2]
+        case .needsReview: return [.s1x1, .s2x1]
         }
     }
 
@@ -79,6 +83,7 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .spendHeatmap: return .s2x1
         case .quickAdd: return .s1x1
         case .topCategories: return .s2x1
+        case .needsReview: return .s1x1
         }
     }
 
@@ -109,6 +114,8 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
             return "A big friendly button that drops you straight into the amount keypad."
         case .topCategories:
             return "Your hungriest categories this month, ranked with little bars."
+        case .needsReview:
+            return "How many transactions your bank sent over that still need a category."
         }
     }
 }

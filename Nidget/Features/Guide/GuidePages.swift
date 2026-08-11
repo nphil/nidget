@@ -206,17 +206,19 @@ struct GuideBudgetPage: View {
     }
 }
 
-// MARK: - Page 3: Quick Add + the cleared checkmark
+// MARK: - Page 3: Review, Quick Add, and the cleared checkmark
 
 struct GuideQuickAddPage: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
         GuidePage(
-            title: "Log spending in seconds",
-            text: "The round + button floats near the bottom of the screen. Tap it for Quick Add: amount, payee, done. Nidget learns your payees and fills in the category next time. The little check means your bank confirmed that transaction. A lock means it is reconciled and settled."
+            title: "Most spending shows up on its own",
+            text: "Your bank sends new transactions over, so most days you are not typing them in. They wait in Review, where you give each one a category. Nidget guesses from what you did last time, so it is usually one tap. The round + button near the bottom is for cash and for anything the bank has not caught up with yet: amount, payee, done. The little check means your bank confirmed that one. A lock means it is reconciled and settled."
         ) {
             VStack(spacing: theme.layout.spacing) {
+                reviewRow
+                    .themedCard(padding: 12)
                 HStack(spacing: theme.layout.spacing) {
                     plusButton
                         .guideSpotlight(cornerRadius: 30, inset: 6)
@@ -231,6 +233,36 @@ struct GuideQuickAddPage: View {
                     .themedCard(padding: 12)
                 calloutRow
             }
+        }
+    }
+
+    /// The Review inbox, shown first because it is where most transactions actually arrive.
+    private var reviewRow: some View {
+        HStack(spacing: theme.layout.spacing * 0.75) {
+            Image(systemName: "tray.full")
+                .font(theme.font(.title))
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(theme.icons.fill ? .fill : .none)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(theme.palette.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Review")
+                    .font(theme.font(.headline))
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1)
+                Text("3 came in from your bank")
+                    .font(theme.font(.caption))
+                    .foregroundStyle(theme.palette.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text("Accept all 3")
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.onAccent)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(theme.palette.accent))
         }
     }
 

@@ -19,6 +19,7 @@ enum Route: Hashable {
     case account(String)
     case reports
     case transactionDetail(String)
+    case review
     case themeGallery
     case securitySettings
     case retirementAssumptions
@@ -107,6 +108,8 @@ private struct RouteDestinationsModifier: ViewModifier {
                 ReportsView()
             case .transactionDetail(let id):
                 TransactionDetailView(transactionID: id)
+            case .review:
+                ReviewView()
             case .themeGallery:
                 ThemeGalleryView()
             case .securitySettings:
