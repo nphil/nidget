@@ -52,7 +52,7 @@ final class AppRouter {
     var pendingTransactionFilter: TransactionQuery?
 
     /// Whether `tab`'s stack is showing its root screen, i.e. nothing has been pushed on top.
-    /// RootView uses this to keep the Quick Add bar accessory on top-level screens only —
+    /// RootView uses this to keep the floating Quick Add button on top-level screens only —
     /// reading one tab's path at a time, so a push in a background tab changes nothing here.
     func isAtRoot(of tab: AppTab) -> Bool {
         switch tab {

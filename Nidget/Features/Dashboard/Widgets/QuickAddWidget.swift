@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - QuickAddWidget
 //
 // The fast lane: a big friendly plus that opens the global Quick Add sheet (the same one the
-// tab bar accessory presents). Purely an affordance — no data, no loading states, glows when the
+// floating button presents). Purely an affordance — no data, no loading states, glows when the
 // theme glows.
 
 struct QuickAddWidget: View {

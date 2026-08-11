@@ -16,7 +16,7 @@ enum Haptics {
     private static let tickGenerator = UIImpactFeedbackGenerator(style: .rigid)
     private static let notifyGenerator = UINotificationFeedbackGenerator()
 
-    /// Standard press feedback (buttons, rows, the Quick Add bar accessory).
+    /// Standard press feedback (buttons, rows, floating Quick Add).
     static func tap() {
         tapGenerator.impactOccurred()
         tapGenerator.prepare()

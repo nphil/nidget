@@ -48,9 +48,16 @@ respected on all page visuals.
 
 **Maintenance rule (also in CLAUDE.md): every future feature change updates its page.**
 
-Superseded 2026-08-10: the floating + button is gone. Quick Add now lives in the tab bar's
-bottom accessory as a full-width "Add transaction" row, so page 3's copy and its mock show that
-row instead of a circular button.
+Superseded 2026-08-11 (do not re-litigate): Quick Add was briefly moved into the tab bar as a
+`.tabViewBottomAccessory` row and the owner rejected it on sight. It reads as a second bar stacked
+above the tab row rather than as part of the tab bar, which makes the bottom of the screen feel
+taller and busier. Quick Add is a floating button again, now a 52pt Liquid Glass disc sitting 92pt
+up from the bottom, with the accent plus on untinted glass. Glass answers the original complaint
+(the old solid 56pt accent circle blanked out the row behind it, notably the Budget screen's Income
+row) because content stays visible through it, and the Budget and Transactions lists now carry a
+bottom content margin so their last row can scroll past the button. Guide page 3 describes the
+round + button and its mock shows the glass disc. `.tabBarMinimizeBehavior(.onScrollDown)` was
+kept from that attempt.
 
 ## 2. Retirement planner overhaul — `Nidget/Features/Retirement/`
 

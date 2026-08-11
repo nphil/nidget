@@ -27,7 +27,7 @@ struct RootView: View {
 
 // MARK: - RootContentView
 //
-// Switches on AppStore.setup and hosts the app frame: the tab bar with its Quick Add accessory,
+// Switches on AppStore.setup and hosts the app frame: the tab bar, the floating Quick Add button,
 // the sync status pill, the error toast, the app lock gate, and the privacy blur.
 
 private struct RootContentView: View {
@@ -108,14 +108,7 @@ private struct RootContentView: View {
         .tint(theme.palette.accent)
         .modifier(TabChromeModifier(chrome: theme.effects.chrome, surface: theme.palette.surface))
         .tabBarMinimizeBehavior(.onScrollDown)
-        .tabViewBottomAccessory {
-            if showsQuickAdd {
-                QuickAddAccessoryRow {
-                    Haptics.tap()
-                    router.quickAddPresented = true
-                }
-            }
-        }
+        .overlay(alignment: .bottomTrailing) { quickAddOverlay }
         .overlay(alignment: .top) { syncStatusOverlay }
         .overlay(alignment: .bottom) { errorToastOverlay }
         .sheet(isPresented: $router.quickAddPresented) {
@@ -146,7 +139,7 @@ private struct RootContentView: View {
         }
     }
 
-    // MARK: Quick Add accessory
+    // MARK: Quick Add floating button
     //
     // Top-level screens only. It belongs to the three tabs where adding a transaction is the
     // obvious next thing, and only while they're showing their own root — pushing Manage
@@ -154,13 +147,27 @@ private struct RootContentView: View {
     // straight back. `isAtRoot(of:)` reads just the frontmost tab's path, so a push in a
     // background tab doesn't touch this.
     //
-    // The `.tabViewBottomAccessory` modifier stays applied on every screen and this flag empties
-    // its content instead of removing the modifier: a conditional modifier would put the TabView
-    // in a different branch of the view tree on each push and pop, which throws away the tab
-    // stacks' state.
+    // The button rides in an overlay rather than in the tab bar itself, so the TabView keeps one
+    // identity across every push and pop and the tab stacks keep their state.
 
     private var showsQuickAdd: Bool {
         Self.quickAddTabs.contains(router.tab) && router.isAtRoot(of: router.tab)
+    }
+
+    @ViewBuilder
+    private var quickAddOverlay: some View {
+        ZStack {
+            if showsQuickAdd {
+                QuickAddFloatingButton {
+                    Haptics.tap()
+                    router.quickAddPresented = true
+                }
+                .transition(.scale(scale: 0.5).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : theme.motion.spring, value: showsQuickAdd)
+        .padding(.trailing, theme.layout.spacing + 8)
+        .padding(.bottom, 92)
     }
 
     // MARK: Sync status pill
@@ -250,35 +257,43 @@ private struct TabChromeModifier: ViewModifier {
     }
 }
 
-// MARK: - QuickAddAccessoryRow
+// MARK: - QuickAddFloatingButton
 //
-// The Quick Add control, living in the tab bar's bottom accessory slot. It rides the bar's own
-// glass, morphs with it, and the system insets scrollable content for it, so it can never sit on
-// top of a list row the way the old floating button did.
+// A 52pt Liquid Glass disc with a plus, floating above the tab bar. Glass rather than the old
+// solid accent circle: it lets the row underneath read through instead of blanking it out, and it
+// sits lighter on the screen. The glass is applied after the frame, because it takes its shape
+// from the final layout.
 //
-// The row draws no background of its own on purpose: the accessory slot already renders the tab
-// bar's material, and a `.glassEffect()` or `GlassEffectContainer` inside it would stack a second
-// layer of glass over the first.
+// The plus is drawn in `theme.palette.accent`, not `onAccent`. `onAccent` is the color that stays
+// legible on a *solid* accent fill, and there is no solid fill here: regular glass mostly shows
+// the screen behind it, which on light themes is near-white (white plus disappears) and on dark
+// themes is near-black (near-black plus disappears). `accent` is the color the app already draws
+// icons in directly on those same backdrops, so it stays readable on every theme. For the same
+// reason the glass is left untinted — an accent tint under an accent glyph would flatten the
+// contrast the glyph depends on.
+//
+// One glass element, so no GlassEffectContainer: containers exist to blend and morph neighbours.
+// No availability gate either — the app's deployment target is iOS 26.
 
-private struct QuickAddAccessoryRow: View {
+private struct QuickAddFloatingButton: View {
     let action: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "plus.circle")
-                    .font(theme.font(.body))
-                    .fontWeight(theme.icons.weight)
-                    .symbolVariant(theme.icons.fill ? .fill : .none)
-                    .foregroundStyle(theme.palette.accent)
-                Text("Add transaction")
-                    .font(theme.font(.subheadline))
-                    .foregroundStyle(theme.palette.textPrimary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .contentShape(Rectangle())
+            Image(systemName: "plus")
+                .font(theme.font(.title))
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(theme.icons.fill ? .fill : .none)
+                .foregroundStyle(theme.palette.accent)
+                .frame(width: 52, height: 52)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .shadow(color: theme.effects.glowAccents ? theme.palette.accent.opacity(0.35) : .clear,
+                        radius: theme.effects.glowAccents ? 10 : 0,
+                        x: 0,
+                        y: theme.effects.glowAccents ? 3 : 0)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Add transaction")

@@ -483,16 +483,23 @@ enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire
 }
 ```
 RootView: `TabView` with the 5 tabs (iOS 26 `Tab` API), `.tint(theme.palette.accent)`,
-`.tabBarMinimizeBehavior(.onScrollDown)`; the **Quick Add tab bar accessory** rides the tab bar
-via `.tabViewBottomAccessory { }` — a full-width row (accent `plus.circle` + "Add transaction",
-min height 44, `Haptics.tap`) that opens the `router.quickAddPresented` sheet with
-`.presentationDetents([.height(560), .large])`. It draws no background of its own: the accessory
-slot already renders the bar's glass, so a second `.glassEffect()` inside it would double the
-material. The system insets scrollable content for the accessory, so unlike the old floating
-button it can never cover a list row. The modifier stays applied on every screen and the content
-is `EmptyView` outside dashboard/budget/transactions or while that tab has anything pushed
-(`AppRouter.isAtRoot(of:)`) — emptying the content rather than dropping the modifier keeps the
-TabView's identity, and therefore the tab stacks' state, stable across pushes and pops.
+`.tabBarMinimizeBehavior(.onScrollDown)`; the **floating Quick Add button** is an
+`.overlay(alignment: .bottomTrailing)` on the TabView — a 52pt Liquid Glass disc
+(`.glassEffect(.regular.interactive(), in: Circle())`, applied after the frame so the glass takes
+the final layout's shape) carrying a `plus` glyph in `theme.palette.accent`, `Haptics.tap` on tap,
+opening the `router.quickAddPresented` sheet with `.presentationDetents([.height(560), .large])`.
+The glyph uses `accent`, not `onAccent`: `onAccent` is the color that survives a *solid* accent
+fill, and translucent glass mostly shows the screen behind it (near-white on light themes,
+near-black on dark), where `onAccent` washes out at both ends. The glass is left untinted for the
+same reason — an accent tint under an accent glyph would eat the contrast the glyph needs.
+Themes with `effects.glowAccents` add a soft accent shadow, kept light because the disc is
+translucent. Position: 92pt from the bottom (clear of the tab bar with breathing room) and
+`theme.layout.spacing + 8` from the trailing edge. Visible only on dashboard/budget/transactions
+and only while that tab shows its root (`AppRouter.isAtRoot(of:)`), fading in and out with
+`.scale(0.5) + .opacity` on the theme spring (nil under Reduce Motion). Because a floating control
+can overlap a list, `BudgetView`'s and `TransactionsView`'s lists carry
+`.contentMargins(.bottom, 92, for: .scrollContent)` so their last row scrolls clear of it; that
+margin is a constant on purpose, with no geometry reads or scroll observers in the hot path.
 Also hosts: sync status pill (top, appears during sync / offline with pending count), error toast,
 privacy-mode blur when app resigns active (`scenePhase`), `AppLockScreen` gate when
 `Preferences.biometricLock` (LocalAuthentication, `.faceID`; locks on background, 8s grace).

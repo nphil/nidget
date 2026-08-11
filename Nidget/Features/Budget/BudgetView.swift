@@ -284,6 +284,10 @@ struct BudgetView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Room at the end of the list for the floating Quick Add button, so the last category can
+        // be scrolled clear of it instead of sitting under it. A static margin on purpose: no
+        // geometry reads, no scroll observers, nothing that costs a frame.
+        .contentMargins(.bottom, 92, for: .scrollContent)
         .refreshable {
             await store.syncNow()
         }
