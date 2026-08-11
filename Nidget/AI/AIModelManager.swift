@@ -9,12 +9,33 @@ struct AIIndexingProgress: Sendable, Equatable {
     var total: Int
 }
 
+/// Which backend writes text. Only generation has a choice: embeddings are llama.cpp only,
+/// because Apple's framework exposes no embedding API Nidget's index could use.
+enum GenerationEngineKind: String, CaseIterable, Identifiable, Sendable {
+    /// A GGUF model the user downloaded, run through llama.cpp. The default.
+    case llama
+    /// The phone's own Apple model, nothing to download.
+    case apple
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .llama: return "Downloaded model"
+        case .apple: return "Apple on-device"
+        }
+    }
+}
+
 /// Top-level on-device AI coordinator: owns model selection, the download list, and the
 /// two llama.cpp worker engines (embedding + generation). Ported from HomeBoy's
-/// AIModelManager / EmbeddingService / GenerationEngine trio, GGUF-only (Nidget has no
-/// Apple-Intelligence providers) and persisting through `Preferences` instead of raw
-/// UserDefaults keys. All blocking llama calls run on the nested `Engine` worker actor,
-/// never the main thread.
+/// AIModelManager / EmbeddingService / GenerationEngine trio, persisting through `Preferences`
+/// instead of raw UserDefaults keys. All blocking llama calls run on the nested `Engine` worker
+/// actor, never the main thread.
+///
+/// It is also the router for the two generation backends: a downloaded GGUF model (the default)
+/// and Apple's built-in on-device model (`FoundationModelEngine`). Text features call
+/// `generate(...)` and never pick a backend themselves. Embeddings stay llama.cpp only.
 @MainActor @Observable
 final class AIModelManager {
     static let shared = AIModelManager()
@@ -42,6 +63,12 @@ final class AIModelManager {
             Preferences.shared.aiGenerationModelID = generationModelID
             configureGenerator()
         }
+    }
+
+    /// Which backend writes text (docs/AI.md §6). Defaults to `.llama` so existing setups keep
+    /// behaving exactly as they did.
+    var generationEngine: GenerationEngineKind {
+        didSet { Preferences.shared.aiGenerationEngine = generationEngine.rawValue }
     }
 
     /// Execution backend for both engines (HomeBoy keeps a per-model map; Nidget uses one
@@ -85,11 +112,16 @@ final class AIModelManager {
     let embedder = Engine(purpose: .embedding)
     let generator = Engine(purpose: .generation)
 
+    /// Apple's built-in on-device model. Always present as an object; it reports its own
+    /// availability and returns nil when it can't run (see FoundationModelEngine).
+    let foundationModel = FoundationModelEngine.shared
+
     private init() {
         let prefs = Preferences.shared
         customModels = Self.decodeCustomModels(prefs.aiCustomModelsJSON)
         embeddingModelID = prefs.aiEmbeddingModelID
         generationModelID = prefs.aiGenerationModelID
+        generationEngine = GenerationEngineKind(rawValue: prefs.aiGenerationEngine) ?? .llama
         backend = LlamaBackend(rawValue: prefs.aiBackend) ?? .auto
         autoUnloadMinutes = prefs.aiAutoUnloadMinutes
 
@@ -145,6 +177,54 @@ final class AIModelManager {
         if generationModelID == id { generationModelID = nil }
         configureEmbedder()
         configureGenerator()
+    }
+
+    // MARK: - Generation router (docs/AI.md §6)
+
+    /// The backend `generate` would use right now, or nil when neither can write anything.
+    ///
+    /// Order: the chosen engine first, then whatever else can actually answer. The last branch
+    /// matters — a phone with Apple Intelligence on and nothing downloaded still gets working
+    /// text features even though the stored preference says "llama", which is what keeps
+    /// `generationReady` an honest promise for the buttons that check it.
+    var activeGenerationEngine: GenerationEngineKind? {
+        if generationEngine == .apple, foundationModel.isAvailable { return .apple }
+        if llamaGenerationReady { return .llama }
+        if foundationModel.isAvailable { return .apple }
+        return nil
+    }
+
+    /// True when either backend can currently produce text. Features gate their AI-only UI on
+    /// this rather than on `generationModelID`, so an Apple-only setup isn't treated as empty.
+    var generationReady: Bool { activeGenerationEngine != nil }
+
+    /// A generation model is selected and its file is on disk.
+    var llamaGenerationReady: Bool {
+        guard let id = generationModelID else { return false }
+        return ModelDownloadManager.shared.isReady(id)
+    }
+
+    /// The single entry point for every text feature. Routes to Apple's on-device model or to
+    /// the llama.cpp generator, and if Apple comes back empty falls through to llama rather
+    /// than giving up (only when a downloaded model is actually there to fall through to).
+    /// The llama arguments are passed straight through, so that path behaves exactly as before.
+    ///
+    /// `allowLlamaFallback: false` makes an Apple miss final. Callers running inside a sync pass
+    /// false unless the llama model happens to be loaded already, because falling through would
+    /// cold-load a multi-hundred-megabyte model mid-sync — the exact thing
+    /// `CategorySuggestionService`'s "only when already loaded" rule exists to prevent.
+    func generate(system: String, user: String,
+                  maxTokens: Int32 = 128, temperature: Float = 0.4, topK: Int32 = 20,
+                  allowLlamaFallback: Bool = true) async -> String? {
+        if activeGenerationEngine == .apple {
+            if let reply = await foundationModel.generate(system: system, user: user,
+                                                          temperature: Double(temperature)) {
+                return reply
+            }
+            guard allowLlamaFallback, llamaGenerationReady else { return nil }
+        }
+        return await generator.chat(system: system, user: user,
+                                    maxTokens: maxTokens, temperature: temperature, topK: topK)
     }
 
     // MARK: - Engine lifecycle

@@ -22,9 +22,11 @@ struct CategorySuggestion: Sendable, Equatable {
 // the transaction embedding index: embed "payee — notes", take the K=12 nearest transactions
 // that already have a category, and let each vote with weight similarity² times a recency
 // multiplier (1.0 today fading to 0.5 at 18 months). Confidence is the winner's share of the
-// total weight. When a generation model is loaded AND the vote is weak (top share < 0.55), a
+// total weight. When the vote is weak (top share < 0.55) and a generation backend can answer, a
 // compact LLM prompt picks between the top candidates; a reply that isn't a real category
-// name is discarded and the kNN answer stands.
+// name is discarded and the kNN answer stands. Refinement goes through `AIModelManager.generate`,
+// so it lands on whichever backend is in play, with the budget rule in `refinedCategoryID`
+// keeping batch runs bounded.
 //
 // The vote needs each neighbour's category and date, which the index deliberately doesn't
 // persist — so the service keeps a ledger snapshot ([tx id: Transaction]) built by paging
@@ -143,15 +145,30 @@ final class CategorySuggestionService {
 
     // MARK: - LLM refinement
 
-    /// Asks the already-loaded generation model to pick between weak kNN candidates.
-    /// Returns a real category id, or nil (engine not loaded, empty reply, or a hallucinated
-    /// name — the caller keeps the kNN answer). Never triggers a model load of its own:
-    /// suggestion latency and memory pressure must stay predictable.
+    /// Asks the generation model to pick between weak kNN candidates. Returns a real category
+    /// id, or nil (no engine, empty reply, or a hallucinated name — the caller keeps the kNN
+    /// answer).
+    ///
+    /// Two different gates, because the two backends cost different things:
+    ///
+    /// - llama.cpp: only when the model is ALREADY loaded. That guard exists so refinement never
+    ///   triggers a cold model load in the middle of a sync; suggestion latency and memory
+    ///   pressure have to stay predictable. Unchanged from before.
+    /// - Apple's on-device model: there is no load step, so it is always "ready" and that guard
+    ///   has nothing to bite on. Left alone it would fire on every weak transaction, and
+    ///   `AppStore.autoCategorizeNewArrivals` walks up to 50 per sync. So the batch path spends
+    ///   from a budget (`resetRefinementBudget(_:)`) and stops refining once it runs out.
+    ///   Interactive suggestions (Quick Add, one at a time, the user is watching) have no budget
+    ///   set and are never limited.
     private func refinedCategoryID(text: String,
                                    candidates: [(categoryID: String, confidence: Double)]) async -> String? {
         let manager = AIModelManager.shared
-        guard manager.generationModelID != nil else { return nil }
-        guard await manager.generator.isLoaded else { return nil }
+        if manager.activeGenerationEngine == .apple {
+            guard spendRefinementBudget() else { return nil }
+        } else {
+            guard manager.generationModelID != nil else { return nil }
+            guard await manager.generator.isLoaded else { return nil }
+        }
 
         let store = AppStore.shared
         let categories = eligibleCategories()
@@ -169,12 +186,45 @@ final class CategorySuggestionService {
         Closest so far: \(candidateNames.joined(separator: ", "))
         Category:
         """
-        guard let reply = await manager.generator.chat(system: system, user: user,
-                                                       maxTokens: 24, temperature: 0.1, topK: 10),
+        // A miss on Apple's model may only fall through to llama when llama is already in
+        // memory. Otherwise the fallback would cold-load the very model the rule above is
+        // trying to keep out of a sync.
+        let fallbackIsFree = await manager.generator.isLoaded
+        guard let reply = await manager.generate(system: system, user: user,
+                                                 maxTokens: 24, temperature: 0.1, topK: 10,
+                                                 allowLlamaFallback: fallbackIsFree),
               !reply.isEmpty else { return nil }
         let matched = Self.categoryID(matching: reply, in: categories)
         Self.log.debug("LLM refinement \(matched != nil ? "matched a category" : "was discarded", privacy: .public)")
         return matched
+    }
+
+    // MARK: - Batch refinement budget
+
+    /// How many Apple-model refinements the current batch may still run. nil = no batch is
+    /// running, so nothing is limited (the interactive Quick Add path). Plain stored state is
+    /// enough to be race-free here: the whole service is `@MainActor`, so the check and the
+    /// decrement happen in one hop with no interleaving await between them.
+    private var batchRefinementBudget: Int?
+
+    /// Opens a batch and caps how many Apple refinements it may spend. Called by
+    /// `AppStore.autoCategorizeNewArrivals` before it starts walking new transactions.
+    func resetRefinementBudget(_ limit: Int) {
+        batchRefinementBudget = max(0, limit)
+    }
+
+    /// Closes the batch: back to unlimited for interactive suggestions.
+    func endRefinementBudget() {
+        batchRefinementBudget = nil
+    }
+
+    /// Takes one refinement from the budget. True when there is no budget (interactive) or one
+    /// was left; false once the batch has spent its allowance.
+    private func spendRefinementBudget() -> Bool {
+        guard let remaining = batchRefinementBudget else { return true }
+        guard remaining > 0 else { return false }
+        batchRefinementBudget = remaining - 1
+        return true
     }
 
     /// Case-insensitive match of an LLM reply to a real category: first line only, quotes

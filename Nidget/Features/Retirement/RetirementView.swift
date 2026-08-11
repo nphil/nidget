@@ -163,11 +163,11 @@ struct RetirementView: View {
         savedConfig.linkedAccountIDs.isEmpty && savedConfig.extraAssets == .zero
     }
 
-    /// A generation model is selected and its file is on disk — the "Explain my plan" card
-    /// exists only then. Reads observable manager state, so body re-evaluates on changes.
+    /// Something can write the explanation: either the phone's Apple model or a downloaded one.
+    /// The "Explain my plan" card exists only then. Reads observable manager state, so body
+    /// re-evaluates when the engine choice changes or a download finishes.
     private var canExplainPlan: Bool {
-        guard let id = AIModelManager.shared.generationModelID else { return false }
-        return ModelDownloadManager.shared.state(for: id) == .ready
+        AIModelManager.shared.generationReady
     }
 
     // MARK: Body
@@ -626,7 +626,7 @@ struct RetirementView: View {
         let system = Self.explainSystemPrompt
         let facts = Self.explainFacts(plan)
         Task {
-            let reply = await AIModelManager.shared.generator.chat(
+            let reply = await AIModelManager.shared.generate(
                 system: system, user: facts,
                 maxTokens: 220, temperature: 0.3, topK: 20)
             guard token == explainToken else { return }   // a newer request or plan took over

@@ -575,7 +575,7 @@ struct GuideIntelligencePage: View {
     var body: some View {
         GuidePage(
             title: "Intelligence",
-            text: "This part is optional. Download a small model from Hugging Face and Nidget can suggest categories and find transactions by meaning, like \u{201C}that sushi place\u{201D}. Everything runs right on your phone. Nothing ever leaves it."
+            text: "This part is optional. Your iPhone's own Apple model can write the plain English bits with nothing to download. Add a small model from Hugging Face instead, or as well, and Nidget can also suggest categories and find transactions by meaning, like \u{201C}that sushi place\u{201D}. Everything runs right on your phone. Nothing ever leaves it."
         ) {
             VStack(alignment: .leading, spacing: theme.layout.spacing * 0.75) {
                 suggestionCard

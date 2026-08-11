@@ -26,6 +26,7 @@ final class Preferences {
         static let aiEmbeddingModelID = "nidget.pref.aiEmbeddingModelID"
         static let aiGenerationModelID = "nidget.pref.aiGenerationModelID"
         static let aiBackend = "nidget.pref.aiBackend"
+        static let aiGenerationEngine = "nidget.pref.aiGenerationEngine"
         static let aiAutoUnloadMinutes = "nidget.pref.aiAutoUnloadMinutes"
         static let aiSemanticSearch = "nidget.pref.aiSemanticSearch"
         static let aiQuickAddSuggestions = "nidget.pref.aiQuickAddSuggestions"
@@ -109,6 +110,12 @@ final class Preferences {
         didSet { UserDefaults.standard.set(aiBackend, forKey: Key.aiBackend) }
     }
 
+    /// Raw `GenerationEngineKind` for writing text ("llama" = a downloaded GGUF model,
+    /// "apple" = the phone's built-in Apple model). Embeddings always stay on llama.cpp.
+    var aiGenerationEngine: String {
+        didSet { UserDefaults.standard.set(aiGenerationEngine, forKey: Key.aiGenerationEngine) }
+    }
+
     /// Minutes of idle time before a loaded AI model is freed (0 = never).
     var aiAutoUnloadMinutes: Int {
         didSet { UserDefaults.standard.set(aiAutoUnloadMinutes, forKey: Key.aiAutoUnloadMinutes) }
@@ -157,6 +164,7 @@ final class Preferences {
         aiEmbeddingModelID = defaults.string(forKey: Key.aiEmbeddingModelID)
         aiGenerationModelID = defaults.string(forKey: Key.aiGenerationModelID)
         aiBackend = defaults.string(forKey: Key.aiBackend) ?? "auto"
+        aiGenerationEngine = defaults.string(forKey: Key.aiGenerationEngine) ?? "llama"
         aiAutoUnloadMinutes = defaults.object(forKey: Key.aiAutoUnloadMinutes) as? Int ?? 5
         aiSemanticSearch = defaults.object(forKey: Key.aiSemanticSearch) as? Bool ?? true
         aiQuickAddSuggestions = defaults.object(forKey: Key.aiQuickAddSuggestions) as? Bool ?? true

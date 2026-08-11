@@ -1115,6 +1115,14 @@ final class AppStore {
         isAutoCategorizing = true
         defer { isAutoCategorizing = false }
 
+        // Cap how much LLM refinement this batch may do. The llama path gates itself on "the
+        // model is already loaded", which is almost never true mid-sync; Apple's on-device model
+        // has no load step, so without a cap refinement would fire on every weak transaction in
+        // a 50-row batch. Eight keeps a sync quick and the phone cool. Interactive suggestions
+        // are unbudgeted (docs/AI.md §6).
+        CategorySuggestionService.shared.resetRefinementBudget(8)
+        defer { CategorySuggestionService.shared.endRefinementBudget() }
+
         let cutoff = BudgetDay.today.addingDays(-45)
         let months = cutoff.month...BudgetMonth.current
         let pageSize = 200

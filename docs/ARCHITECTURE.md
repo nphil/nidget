@@ -35,6 +35,11 @@ this document, the code is wrong (or this document must be amended deliberately 
 - **State architecture:** one `@MainActor @Observable` `AppStore` as source of truth for UI-facing
   state; engines (`SyncEngine`, DB) live off the main actor. Views talk only to `AppStore`,
   `ThemeManager`, `DashboardModel`, and pure helpers.
+- **All AI on device, two generation backends.** llama.cpp with downloaded GGUF models (the
+  default) and Apple's Foundation Models framework (nothing to download). `AIModelManager` is the
+  only router; text features call `generate(...)` and never pick a backend. The FoundationModels
+  import is wrapped in `#if canImport(FoundationModels)` so a build SDK without it still compiles.
+  Embeddings stay llama.cpp only. Details and the batch refinement cap: docs/AI.md §6.
 - **No force unwraps** (`!`) outside of provably-static cases (e.g. `URL(string: "https://…")!` of a
   literal). No `try!`, no `fatalError` in reachable paths.
 - **Every file compiles independently of file order** — no `fileprivate` cross-file tricks.
@@ -66,8 +71,11 @@ Nidget/
     Store/AppStore.swift Mutations.swift BudgetCalculator.swift
     Store/Preferences.swift KeychainStore.swift
     Retirement/RetirementPlan.swift MonteCarlo.swift
+  AI/                        on-device intelligence (docs/AI.md): llama.cpp engines, embedding
+                             index, category suggestions, FoundationModelEngine
   Features/
     Dashboard/  Budget/  Transactions/  Accounts/  Reports/  Retirement/  Settings/
+    Guide/
   Platform/AppShortcuts.swift PrivacyInfo.xcprivacy
 docs/ARCHITECTURE.md (this) docs/PROTOCOL.md (wire-protocol reference)
 ```

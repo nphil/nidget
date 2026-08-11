@@ -145,3 +145,42 @@ for money, no third-party Swift deps (llama.xcframework is a binary, not SPM), n
 os.Logger (`category: "ai"`), never log transaction text or model prompts at `.default` level
 (`.debug` only). Every AI feature checks `AIModelManager.shared` state and renders its absence
 as helpful empty states, not errors.
+
+## 6. Two generation backends (`AIModelManager` is the router)
+
+Text generation has two interchangeable backends. Embeddings do **not** — the semantic index is
+llama.cpp only, because Apple's framework exposes no embedding API to build it from.
+
+- **llama.cpp** (`AIModelManager.Engine(purpose: .generation)`) — a downloaded GGUF model.
+  The default (`Preferences.aiGenerationEngine == "llama"`) and unchanged in every respect.
+- **Apple Foundation Models** (`Nidget/AI/FoundationModelEngine.swift`) — the phone's built-in
+  on-device model. Nothing to download. `@MainActor @Observable` rather than an actor: inference
+  happens out of process, so `respond(to:)` is a plain async suspension with no blocking work to
+  move off the main thread, and main-actor isolation lets SwiftUI and `AIModelManager` read
+  availability synchronously in `body`. `import FoundationModels` is wrapped in
+  `#if canImport(FoundationModels)` so an older CI SDK still compiles; the false branch reports
+  `.frameworkUnavailable` and generates nothing.
+
+**Availability** is mirrored into Nidget's own `FoundationModelAvailability` so no other file
+imports the framework: `.available`, `.deviceNotEligible`, `.notEnabled` (Apple Intelligence is
+off in system Settings), `.modelNotReady` (still downloading or warming up), `.frameworkUnavailable`.
+`statusMessage` turns each into one plain line for the Intelligence screen, where the Apple option
+stays visible but disabled with its reason underneath rather than disappearing.
+
+**Routing.** Every text feature calls `AIModelManager.generate(system:user:maxTokens:temperature:topK:)`
+and never picks a backend. `activeGenerationEngine` decides: the selected engine if it can answer,
+then whichever other one can. That last step matters — a phone with Apple Intelligence on and
+nothing downloaded still gets working text features, which is what makes `generationReady` (true
+when *either* backend can produce text) an honest gate for UI like the Retirement screen's
+"Explain my plan" card. If the Apple call comes back nil, the router falls through to llama, but
+only when a downloaded generation model is actually there. Generation on Apple's model passes
+`GenerationOptions(temperature:)` only, and every session is created fresh per call: sessions are
+stateful multi-turn transcripts, so reuse would grow context until the window overflowed.
+
+**Batch refinement cap.** `CategorySuggestionService.refinedCategoryID` used to gate on "the llama
+model is already loaded", which is almost never true mid-sync and kept LLM refinement rare by
+accident. Apple's model has no load step, so that gate has nothing to bite on. The batch path
+therefore spends from a budget: `AppStore.autoCategorizeNewArrivals` calls
+`resetRefinementBudget(8)` before walking its (up to 50) candidates and `endRefinementBudget()`
+after, and refinement refuses once the budget hits zero. Interactive suggestions (Quick Add, one
+at a time, user watching) have no budget set and are never limited.

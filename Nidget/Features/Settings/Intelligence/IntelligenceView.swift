@@ -3,9 +3,10 @@ import SwiftUI
 // MARK: - IntelligenceView
 //
 // Pushed via `Route.intelligence` (ARCHITECTURE §16, docs/AI.md §4) — no NavigationStack of its
-// own. The whole on-device AI surface in one screen of themed cards (never a stock Form): two
-// model slots (Embedding, Generation) with live load state, the shared llama.cpp backend picker,
-// the three feature toggles, the semantic search index, and a link through to benchmarking.
+// own. The whole on-device AI surface in one screen of themed cards (never a stock Form): the
+// writing-engine choice (Apple's built-in model or a downloaded one), two model slots (Embedding,
+// Generation) with live load state, the shared llama.cpp backend picker, the three feature
+// toggles, the semantic search index, and a link through to benchmarking.
 //
 // `AIModelManager`/`ModelDownloadManager` aren't environment-injected (ARCHITECTURE §16's binding
 // list doesn't carry them) — they're `@MainActor @Observable` singletons read directly via
@@ -56,7 +57,10 @@ struct IntelligenceView: View {
 
     @ViewBuilder
     private var content: some View {
-        if ai.customModels.isEmpty {
+        // The empty state only makes sense when there is genuinely nothing to set up. If the
+        // phone's own Apple model is available there IS something to choose, so the full card
+        // stack renders and the model slots show their own "Add a model to turn this on." line.
+        if ai.customModels.isEmpty && !ai.foundationModel.isAvailable {
             EmptyStateView(
                 systemImage: "sparkles",
                 title: "No models yet",
@@ -68,7 +72,10 @@ struct IntelligenceView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.layout.spacing) {
+                    SectionHeader("Writing")
+                    GenerationEngineCard()
                     SectionHeader("Models")
+                        .padding(.top, theme.layout.spacing * 0.5)
                     ModelSlotCard(purpose: .embedding, icon: "text.magnifyingglass", title: "Embedding") {
                         openBrowser(for: .embedding)
                     }
@@ -326,6 +333,100 @@ private struct IndexProgressBar: View {
     }
 }
 
+// MARK: - GenerationEngineCard
+//
+// Picks which backend writes text (docs/AI.md §6): the phone's built-in Apple model or a
+// downloaded GGUF model through llama.cpp. Two radio rows rather than a `ChipPicker`, because
+// one option can be unavailable and needs to stay visible with its reason underneath — a chip
+// row has no per-item disabled state, and hiding the option would leave the owner guessing why
+// their iPhone doesn't offer it. Only generation is affected: search and category matching
+// always run on the embedding model in the slot below.
+
+private struct GenerationEngineCard: View {
+    @Environment(\.theme) private var theme
+
+    private var ai: AIModelManager { AIModelManager.shared }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: theme.layout.spacing * 0.6) {
+            // Not the Apple logo symbol: its SF Symbols use is trademark-restricted, and the
+            // name is easy to get wrong. "iphone" says the same thing, that this is built in.
+            engineRow(.apple,
+                     icon: "iphone",
+                     message: appleAvailable ? "Built into your iPhone. Nothing to download."
+                                             : ai.foundationModel.statusMessage,
+                     isEnabled: appleAvailable)
+            separator
+            engineRow(.llama,
+                     icon: "arrow.down.doc",
+                     message: "Uses the generation model you pick below.",
+                     isEnabled: true)
+            Text(footnote)
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .themedCard()
+    }
+
+    private var appleAvailable: Bool { ai.foundationModel.isAvailable }
+
+    private var footnote: String {
+        if ai.generationEngine == .apple && appleAvailable {
+            return "Your phone writes the plain English bits, like explaining your retirement plan. There is nothing to download for this. Finding transactions by meaning still uses the embedding model below."
+        }
+        return "The generation model below writes the plain English bits, like explaining your retirement plan. It stays off until something asks it for words."
+    }
+
+    private func engineRow(_ kind: GenerationEngineKind,
+                           icon: String,
+                           message: String,
+                           isEnabled: Bool) -> some View {
+        let isSelected = ai.generationEngine == kind
+        return Button {
+            select(kind)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(isSelected ? theme.palette.accent : theme.palette.textTertiary)
+                Image(systemName: icon)
+                    .font(theme.font(.subheadline))
+                    .fontWeight(theme.icons.weight)
+                    .foregroundStyle(theme.palette.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(kind.displayName)
+                        .font(theme.font(.body))
+                        .foregroundStyle(theme.palette.textPrimary)
+                    Text(message)
+                        .font(theme.font(.caption))
+                        .foregroundStyle(theme.palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.55)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private func select(_ kind: GenerationEngineKind) {
+        guard ai.generationEngine != kind else { return }
+        Haptics.tick()
+        ai.generationEngine = kind
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(theme.palette.separator)
+            .frame(height: 1)
+    }
+}
+
 // MARK: - ModelSlotCard
 //
 // One purpose's whole story in a card: the selected model (name, size, live `EngineStatus`),
@@ -358,6 +459,12 @@ private struct ModelSlotCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.75) {
             header
+            if purpose == .generation, ai.generationEngine == .apple, ai.foundationModel.isAvailable {
+                Text("Not needed right now. Your iPhone's own model is doing the writing.")
+                    .font(theme.font(.caption))
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             selectionSummary
             if !installedSpecs.isEmpty {
                 separator
