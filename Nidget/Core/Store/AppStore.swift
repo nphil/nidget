@@ -665,7 +665,8 @@ final class AppStore {
         let matchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
 
         var ranked: [(suggestion: PayeeSuggestion, anchored: Bool, score: Double)] = []
-        for payee in payees where payee.transferAccountID == nil && !payee.name.isEmpty {
+        for payee in payees where payee.transferAccountID == nil && !payee.name.isEmpty
+                                  && !Self.isSyntheticPayee(payee.name) {
             let entry = activity[payee.id]
             let anchored: Bool
             if prefix.isEmpty {
@@ -698,6 +699,18 @@ final class AppStore {
             return lhs.suggestion.name.localizedCaseInsensitiveCompare(rhs.suggestion.name) == .orderedAscending
         }
         return ranked.prefix(max(1, query.limit)).map { $0.suggestion }
+    }
+
+    /// Payees Actual creates for its own bookkeeping rather than for anything you actually paid.
+    /// "Starting Balance" is the one that matters: every account gets an opening-balance
+    /// transaction against it, so it ranks high on recency and lands in the Quick Add chips, where
+    /// it is never the right answer. Actual marks those rows with `starting_balance_flag` rather
+    /// than marking the payee, and Nidget's Transaction model does not carry that column yet, so
+    /// this matches on the name Actual uses.
+    private static func isSyntheticPayee(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.compare("Starting Balance", options: .caseInsensitive) == .orderedSame
+            || trimmed.compare("Starting Balances", options: .caseInsensitive) == .orderedSame
     }
 
     /// 0…4 ranking bonus, decaying linearly over 90 days of inactivity.

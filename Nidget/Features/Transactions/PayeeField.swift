@@ -31,6 +31,7 @@ struct PayeeField: View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.6) {
             field
             if !suggestions.isEmpty {
+                chipsHeader
                 chipsRow
             }
         }
@@ -91,6 +92,17 @@ struct PayeeField: View {
     }
 
     // MARK: Suggestion chips
+
+    // The chips used to sit bare under the field, which read as a mystery row of names and
+    // numbers rather than as something to tap. The label says what they are and changes with the
+    // field so it stays honest: recents when nothing is typed, matches once you start.
+    private var chipsHeader: some View {
+        Text(text.isEmpty ? "Recent payees" : "Matching payees")
+            .font(theme.font(.label))
+            .foregroundStyle(theme.palette.textTertiary)
+            .textCase(theme.typography.labelCase)
+            .tracking(theme.typography.labelTracking)
+    }
 
     private var chipsRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {

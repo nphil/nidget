@@ -56,8 +56,11 @@ up from the bottom, with the accent plus on untinted glass. Glass answers the or
 (the old solid 56pt accent circle blanked out the row behind it, notably the Budget screen's Income
 row) because content stays visible through it, and the Budget and Transactions lists now carry a
 bottom content margin so their last row can scroll past the button. Guide page 3 describes the
-round + button and its mock shows the glass disc. `.tabBarMinimizeBehavior(.onScrollDown)` was
-kept from that attempt.
+round + button and its mock shows the glass disc.
+
+`.tabBarMinimizeBehavior(.onScrollDown)` was kept from that attempt and then removed on
+2026-08-11: the owner does not want the bottom bar shrinking as the list scrolls. The tab bar is
+fixed at full height on every screen. Do not reintroduce it.
 
 ## 2. Retirement planner overhaul — `Nidget/Features/Retirement/`
 

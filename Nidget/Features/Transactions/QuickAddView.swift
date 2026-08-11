@@ -4,8 +4,8 @@ import SwiftUI
 //
 // The daily-driver capture sheet (ARCHITECTURE §14): opens straight on the amount keypad with a
 // hero amount that ticks as digits land, an expense/income sign toggle, a payee field with live
-// suggestions that auto-fill the category, a top-6 category chip row, a tap-to-cycle account
-// row, and Today/Yesterday/calendar date chips. Save is one full-width primary button that
+// suggestions that auto-fill the category, a top-6 category chip row, an account picker menu,
+// and Today/Yesterday/calendar date chips. Save is one full-width primary button that
 // celebrates with a bouncing checkmark and dismisses itself. Presented by RootView as a sheet
 // at the 560pt detent; everything actionable sits in thumb reach above the keypad.
 
@@ -292,44 +292,90 @@ struct QuickAddView: View {
 
     // MARK: Account row
 
+    // A real picker, not the tap-to-cycle button this used to be. Cycling meant tapping blind
+    // until the right name came up and never showing what the choices were, which stopped making
+    // sense the moment there were more than two accounts. The menu lists every open account with
+    // its balance, split into on-budget and off-budget so the two never get confused, and iOS
+    // draws the checkmark on the current one.
+
     private var accountRow: some View {
-        Button {
-            cycleAccount()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "building.columns")
-                    .font(theme.font(.body))
-                    .fontWeight(theme.icons.weight)
-                    .symbolVariant(theme.icons.fill ? .fill : .none)
-                    .foregroundStyle(theme.palette.accent)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Account")
-                        .font(theme.font(.label))
-                        .foregroundStyle(theme.palette.textTertiary)
-                        .textCase(theme.typography.labelCase)
-                        .tracking(theme.typography.labelTracking)
-                    Text(selectedAccountName)
-                        .font(theme.font(.headline))
-                        .foregroundStyle(theme.palette.textPrimary)
-                        .lineLimit(1)
+        Menu {
+            Picker("Account", selection: accountSelection) {
+                if !onBudgetAccounts.isEmpty {
+                    Section("On budget") {
+                        ForEach(onBudgetAccounts) { accountMenuRow($0) }
+                    }
                 }
-                Spacer()
-                if cycleAccountsList.count > 1 {
-                    Image(systemName: "arrow.2.squarepath")
-                        .font(theme.font(.caption))
-                        .fontWeight(theme.icons.weight)
-                        .foregroundStyle(theme.palette.textTertiary)
+                if !offBudgetAccounts.isEmpty {
+                    Section("Off budget") {
+                        ForEach(offBudgetAccounts) { accountMenuRow($0) }
+                    }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(minHeight: 52)
-            .background(theme.controlShape.fill(theme.palette.fill))
-            .contentShape(theme.controlShape)
+            .pickerStyle(.inline)
+        } label: {
+            accountRowLabel
         }
-        .buttonStyle(.plain)
         .accessibilityLabel("Account: \(selectedAccountName)")
-        .accessibilityHint(cycleAccountsList.count > 1 ? "Double-tap to switch accounts" : "")
+        .accessibilityHint("Choose the account this transaction lands in")
+    }
+
+    private var accountRowLabel: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "building.columns")
+                .font(theme.font(.body))
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(theme.icons.fill ? .fill : .none)
+                .foregroundStyle(theme.palette.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Account")
+                    .font(theme.font(.label))
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .textCase(theme.typography.labelCase)
+                    .tracking(theme.typography.labelTracking)
+                Text(selectedAccountName)
+                    .font(theme.font(.headline))
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let balance = selectedAccountBalance {
+                AmountText(balance, style: .caption, colorized: false)
+            }
+            Image(systemName: "chevron.up.chevron.down")
+                .font(theme.font(.caption))
+                .fontWeight(theme.icons.weight)
+                .foregroundStyle(theme.palette.textTertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(minHeight: 52)
+        .background(theme.controlShape.fill(theme.palette.fill))
+        .contentShape(theme.controlShape)
+    }
+
+    /// Name over balance, which SwiftUI renders as a menu row with a subtitle.
+    private func accountMenuRow(_ account: Account) -> some View {
+        VStack(alignment: .leading) {
+            Text(account.name)
+            Text(CurrencyFormatter.string(account.balance))
+        }
+        .tag(account.id)
+    }
+
+    /// The Picker wants a plain String; "" stands in for "nothing chosen yet", which only happens
+    /// before `configureDefaultAccount` runs.
+    private var accountSelection: Binding<String> {
+        Binding(get: { selectedAccountID ?? "" },
+                set: { newValue in
+                    guard !newValue.isEmpty, newValue != selectedAccountID else { return }
+                    Haptics.tick()
+                    if reduceMotion {
+                        selectedAccountID = newValue
+                    } else {
+                        withAnimation(theme.motion.snappy) { selectedAccountID = newValue }
+                    }
+                })
     }
 
     private var selectedAccountName: String {
@@ -340,32 +386,21 @@ struct QuickAddView: View {
         return account.name
     }
 
-    /// Open on-budget accounts; falls back to any open account when none are on-budget.
-    private var cycleAccountsList: [Account] {
-        let open = store.accounts.filter { !$0.closed }
-        let onBudget = open.filter { !$0.offBudget }
-        return onBudget.isEmpty ? open : onBudget
+    private var selectedAccountBalance: Money? {
+        guard let id = selectedAccountID else { return nil }
+        return store.accounts.first(where: { $0.id == id })?.balance
+    }
+
+    private var onBudgetAccounts: [Account] {
+        store.accounts.filter { !$0.closed && !$0.offBudget }
+    }
+
+    private var offBudgetAccounts: [Account] {
+        store.accounts.filter { !$0.closed && $0.offBudget }
     }
 
     private var hasUsableAccounts: Bool {
         store.accounts.contains { !$0.closed }
-    }
-
-    private func cycleAccount() {
-        let list = cycleAccountsList
-        guard !list.isEmpty else { return }
-        Haptics.tick()
-        guard let current = selectedAccountID,
-              let index = list.firstIndex(where: { $0.id == current }) else {
-            selectedAccountID = list.first?.id
-            return
-        }
-        let next = list[(index + 1) % list.count]
-        if reduceMotion {
-            selectedAccountID = next.id
-        } else {
-            withAnimation(theme.motion.snappy) { selectedAccountID = next.id }
-        }
     }
 
     private func configureDefaultAccount() {

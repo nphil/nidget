@@ -107,7 +107,6 @@ private struct RootContentView: View {
         }
         .tint(theme.palette.accent)
         .modifier(TabChromeModifier(chrome: theme.effects.chrome, surface: theme.palette.surface))
-        .tabBarMinimizeBehavior(.onScrollDown)
         .overlay(alignment: .bottomTrailing) { quickAddOverlay }
         .overlay(alignment: .top) { syncStatusOverlay }
         .overlay(alignment: .bottom) { errorToastOverlay }
