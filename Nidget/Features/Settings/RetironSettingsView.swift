@@ -66,6 +66,9 @@ struct RetironSettingsView: View {
                 footnote
             }
             .padding(theme.layout.cardPadding)
+            // Same width pin as SettingsView: keeps a stray point of horizontal overflow from
+            // turning into a sideways bounce on the whole screen.
+            .containerRelativeFrame(.horizontal)
         }
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)

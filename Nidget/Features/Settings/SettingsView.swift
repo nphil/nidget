@@ -59,6 +59,10 @@ struct SettingsView: View {
                 aboutCard
             }
             .padding(theme.layout.cardPadding)
+            // Pin the content to the viewport width. Without this, anything the layout pass
+            // measures a point too wide makes the whole screen pan and bounce sideways, since a
+            // vertical ScrollView happily scrolls any horizontal overflow.
+            .containerRelativeFrame(.horizontal)
         }
         .scrollIndicators(.hidden)
         .themedScreen()
