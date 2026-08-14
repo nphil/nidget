@@ -610,8 +610,9 @@ private struct WidgetCardEditGestureModifier: ViewModifier {
 /// is the one place that already owns each widget's navigation `action`. A plain `Button` would
 /// fire on release-within-bounds no matter how far the finger travelled first, so this replaces
 /// that with a `DragGesture(minimumDistance: 0)`: navigation only fires for a quick, nearly-still
-/// touch (< 10pt movement, < 0.4s), the press-down scale only appears after an ~80ms hold (so a
-/// fast swipe never flashes the tile), and the drag's vertical travel is reported upward the
+/// touch (< 10pt movement, < 0.4s), the press-down scale only appears after an ~80ms hold and is
+/// cancelled the instant the finger leaves the 10pt tap slop (so a swipe never shows the tile
+/// pressed, no matter how long it lasts), and the drag's vertical travel is reported upward the
 /// whole time so the edge glow can follow a finger that started on a tile. A
 /// `.onLongPressGesture` runs alongside it (`.simultaneousGesture` keeps the two from blocking
 /// each other) to enter edit mode. Once edit mode is on, DashboardGrid disables hit testing on
@@ -629,6 +630,7 @@ struct WidgetCardButton<Content: View>: View {
     @State private var isPressed = false
     @State private var pressStart: Date?
     @State private var pressToken = UUID()
+    @State private var pressMoved = false
 
     init(alignment: Alignment = .topLeading,
          action: @escaping () -> Void,
@@ -661,19 +663,27 @@ struct WidgetCardButton<Content: View>: View {
             .onChanged { value in
                 if pressStart == nil {
                     pressStart = Date()
+                    pressMoved = false
                     schedulePressVisual()
+                }
+                let translation = value.translation
+                if !pressMoved,
+                   translation.width * translation.width
+                     + translation.height * translation.height >= 100 {
+                    // Finger left the tap slop: this is a swipe, so the tile must never look
+                    // pressed. Invalidate the pending visual and undo one that already landed.
+                    pressMoved = true
+                    pressToken = UUID()
+                    isPressed = false
                 }
                 reportPull?(value.translation.height)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 let duration = pressStart.map { Date().timeIntervalSince($0) } ?? 0
                 pressStart = nil
                 isPressed = false
                 reportPull?(nil)
-                let translation = value.translation
-                let magnitude = (translation.width * translation.width
-                                  + translation.height * translation.height).squareRoot()
-                if magnitude < 10, duration < 0.4 {
+                if !pressMoved, duration < 0.4 {
                     Haptics.tap()
                     action()
                 }
@@ -688,7 +698,7 @@ struct WidgetCardButton<Content: View>: View {
         pressToken = token
         Task {
             try? await Task.sleep(for: .milliseconds(80))
-            guard !Task.isCancelled, pressToken == token, pressStart != nil else { return }
+            guard !Task.isCancelled, pressToken == token, pressStart != nil, !pressMoved else { return }
             isPressed = true
         }
     }
