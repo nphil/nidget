@@ -610,7 +610,8 @@ private struct WidgetCardEditGestureModifier: ViewModifier {
 /// is the one place that already owns each widget's navigation `action`. A plain `Button` would
 /// fire on release-within-bounds no matter how far the finger travelled first, so this replaces
 /// that with a `DragGesture(minimumDistance: 0)`: navigation only fires for a quick, nearly-still
-/// touch (< 10pt movement, < 0.4s), the press-down scale only appears after an ~80ms hold and is
+/// touch (< 10pt movement, < 0.4s), the press-down scale appears after an ~80ms hold — or as a
+/// brief release-time pulse when the tap was quicker than that, so every tap reads — and is
 /// cancelled the instant the finger leaves the 10pt tap slop (so a swipe never shows the tile
 /// pressed, no matter how long it lasts), and the drag's vertical travel is reported upward the
 /// whole time so the edge glow can follow a finger that started on a tile. A
@@ -681,9 +682,16 @@ struct WidgetCardButton<Content: View>: View {
             .onEnded { _ in
                 let duration = pressStart.map { Date().timeIntervalSince($0) } ?? 0
                 pressStart = nil
-                isPressed = false
                 reportPull?(nil)
-                if !pressMoved, duration < 0.4 {
+                let isTap = !pressMoved && duration < 0.4
+                if isTap, !isPressed {
+                    // The tap ended before the delayed visual landed; flash the pressed state
+                    // now (UIKit's own quick-tap-on-a-cell behavior) so every tap reads.
+                    flashPressVisual()
+                } else {
+                    isPressed = false
+                }
+                if isTap {
                     Haptics.tap()
                     action()
                 }
@@ -700,6 +708,20 @@ struct WidgetCardButton<Content: View>: View {
             try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled, pressToken == token, pressStart != nil, !pressMoved else { return }
             isPressed = true
+        }
+    }
+
+    /// Release-time press pulse for taps quicker than the 80ms delay: scale down now, back up a
+    /// beat later. Claiming `pressToken` also retires the pending delayed visual, and lets a new
+    /// touch (which re-claims the token in `schedulePressVisual`) supersede the ease-out cleanly.
+    private func flashPressVisual() {
+        let token = UUID()
+        pressToken = token
+        isPressed = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(110))
+            guard !Task.isCancelled, pressToken == token else { return }
+            isPressed = false
         }
     }
 }
