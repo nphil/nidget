@@ -10,7 +10,15 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppStore.self) private var store
     @Environment(ThemeManager.self) private var themeManager
+    @Environment(Preferences.self) private var preferences
     @Environment(\.colorScheme) private var colorScheme
+
+    /// Which icon the home screen should be showing: the active theme's when the owner asked for
+    /// that, otherwise nil for the primary icon. Also flips when the appearance mode swaps the
+    /// active theme between its light and dark slots, which is the point.
+    private var wantedIconThemeID: String? {
+        preferences.themedAppIcon ? themeManager.active.id : nil
+    }
 
     var body: some View {
         RootContentView()
@@ -18,9 +26,18 @@ struct RootView: View {
             .environment(\.privacyMode, store.privacyMode)
             .onAppear {
                 themeManager.systemIsDark = colorScheme == .dark
+                // Deliberately after the line above, and deliberately not an `initial: true` on the
+                // onChange below. `systemIsDark` starts out assuming dark, so the very first body
+                // evaluation resolves `active` to the dark slot on a light-mode phone; acting on
+                // that would swap to the dark theme's icon and then straight back, and iOS would
+                // announce both. Reading it once the mirror is correct settles the icon in one go.
+                AppIcon.apply(themeID: wantedIconThemeID)
             }
             .onChange(of: colorScheme) { _, newValue in
                 themeManager.systemIsDark = newValue == .dark
+            }
+            .onChange(of: wantedIconThemeID) { _, themeID in
+                AppIcon.apply(themeID: themeID)
             }
     }
 }

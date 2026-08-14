@@ -22,6 +22,11 @@ apps.json on every push; versions derive from published v* tags, never the worki
 5. The Xcode project is a hand-written pbxproj using filesystem-synchronized groups: new
    Swift files need no project edits, but build-setting/framework changes are careful
    hand edits. Versions in it are CI-managed; preserve them when editing.
+6. **App icons are drawn by a script, never by hand.** `scripts/render-app-icons.pl` writes
+   the primary icon (light/dark/tinted) plus one alternate per theme, deriving each theme's
+   colors from its own palette in ThemeCatalog. Add or recolor a theme and re-run
+   `perl scripts/render-app-icons.pl`, then commit the PNGs it changes. Editing a PNG by hand
+   is wasted work: the next run overwrites it.
 
 ## Key references
 

@@ -33,6 +33,7 @@ final class Preferences {
         static let aiAutoCategorize = "nidget.pref.aiAutoCategorize"
         static let categoryIconsJSON = "nidget.pref.categoryIconsJSON"
         static let aiAutoFiledIDsJSON = "nidget.pref.aiAutoFiledIDs"
+        static let themedAppIcon = "nidget.pref.themedAppIcon"
     }
 
     /// Serialized `[DashboardItem]` (Features/Dashboard). Empty string = use the default layout.
@@ -61,6 +62,12 @@ final class Preferences {
     /// The onboarding Guide has been seen (or skipped) once; RootView stops auto-presenting it.
     var hasSeenGuide: Bool {
         didSet { UserDefaults.standard.set(hasSeenGuide, forKey: Key.hasSeenGuide) }
+    }
+
+    /// Swap the home screen icon to the active theme's icon (`AppIcon`, Platform). Off by default:
+    /// iOS announces every icon change with an alert of its own, so this has to be asked for.
+    var themedAppIcon: Bool {
+        didSet { UserDefaults.standard.set(themedAppIcon, forKey: Key.themedAppIcon) }
     }
 
     /// Serialized `RetirementConfig` (Core/Retirement). Empty string = defaults.
@@ -174,6 +181,7 @@ final class Preferences {
         biometricLock = defaults.bool(forKey: Key.biometricLock)
         privacyModeDefault = defaults.bool(forKey: Key.privacyModeDefault)
         hasSeenGuide = defaults.bool(forKey: Key.hasSeenGuide)
+        themedAppIcon = defaults.bool(forKey: Key.themedAppIcon)
         retirementConfigJSON = defaults.string(forKey: Key.retirementConfigJSON) ?? ""
         defaultAccountID = defaults.string(forKey: Key.defaultAccountID)
         aiCustomModelsJSON = defaults.string(forKey: Key.aiCustomModelsJSON) ?? ""

@@ -10,6 +10,8 @@ taps.
   first and syncs opportunistically when the server is reachable.
 - **40 hand-tuned themes** (20 light, 20 dark) that change typography, card construction, corner
   geometry, backgrounds, shadows, chrome, spacing, chart rendering, and motion — not just colors.
+  Each one has its own home screen icon, and Settings can keep the icon matched to the theme you
+  are using.
 - **A one-screen dashboard** you compose yourself: pick widgets, drag to rearrange, resize —
   everything fits without scrolling.
 - **3-tap transaction capture** with payee/category learning, from any tab, plus Siri/Shortcuts.

@@ -236,6 +236,10 @@ struct SettingsView: View {
         Binding(get: { themeManager.appearanceMode }, set: { themeManager.appearanceMode = $0 })
     }
 
+    private var themedAppIconBinding: Binding<Bool> {
+        Binding(get: { preferences.themedAppIcon }, set: { preferences.themedAppIcon = $0 })
+    }
+
     private var appearanceCard: some View {
         SettingsCard(title: "Appearance", systemImage: "paintpalette") {
             ChipPicker(items: AppearanceMode.allCases, selection: appearanceModeBinding,
@@ -246,7 +250,35 @@ struct SettingsView: View {
             navRow("Theme Gallery", systemImage: "square.grid.2x2") {
                 router.push(.themeGallery)
             }
+            if AppIcon.isSupported {
+                separator
+                themedAppIconRow
+            }
         }
+    }
+
+    private var themedAppIconRow: some View {
+        Toggle(isOn: themedAppIconBinding) {
+            HStack(spacing: 8) {
+                Image(systemName: "app.badge")
+                    .font(theme.font(.subheadline))
+                    .fontWeight(theme.icons.weight)
+                    .symbolVariant(theme.icons.fill ? .fill : .none)
+                    .foregroundStyle(theme.palette.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Match Home Screen Icon")
+                        .font(theme.font(.body))
+                        .foregroundStyle(theme.palette.textPrimary)
+                    Text("Every theme comes with its own icon. iOS will show a note each time the icon changes.")
+                        .font(theme.font(.caption))
+                        .foregroundStyle(theme.palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .tint(theme.palette.accent)
+        .frame(minHeight: 44)
     }
 
     private func themeRow(_ label: String, _ t: Theme) -> some View {
