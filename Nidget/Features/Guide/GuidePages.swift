@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - Guide pages
 //
-// The seven pages of the in-app Guide (docs/UX_ROUND2.md §1). Each page is a title, a few
+// The eight pages of the in-app Guide (docs/UX_ROUND2.md §1). Each page is a title, a few
 // short sentences, and a small live visual built from the app's real design language — mini
 // mocks that echo ProgressRing, AmountText, the cleared checkmark, the sync pill, dashboard
 // tiles, and the Quick Add sparkles chip. Every visual is static and cheap: hardcoded sample
@@ -547,7 +547,7 @@ struct GuideRetirementPage: View {
     var body: some View {
         GuidePage(
             title: "Retirement",
-            text: "Link your investment accounts and Nidget works out when work becomes optional, using what you actually spend. Drag on the chart to explore any age. The sliders show how saving a little more, or spending a little less, moves the date."
+            text: "Link your investment accounts and Nidget works out when work becomes optional, using what you actually spend. Drag on the chart to explore any age. The sliders show how saving a little more, or spending a little less, moves the date. Near the top of that screen there is a card for the bigger household plan, the one with both incomes and both houses in it."
         ) {
             VStack(alignment: .leading, spacing: theme.layout.spacing * 0.75) {
                 chart
@@ -599,7 +599,114 @@ struct GuideRetirementPage: View {
     }
 }
 
-// MARK: - Page 7: Intelligence
+// MARK: - Page 7: the household plan
+
+struct GuideHouseholdPage: View {
+    @Environment(\.theme) private var theme
+
+    /// A household net worth curve, in thousands, from today to the target age. Mock numbers, the
+    /// same shape the real projection draws.
+    private static let values: [Double] = [420, 505, 610, 720, 850, 1_010, 1_190, 1_400,
+                                           1_650, 1_940, 2_280, 2_680, 3_140, 3_680]
+
+    var body: some View {
+        GuidePage(
+            title: "The household plan",
+            text: "This is the plan for the whole household. Retiron runs on your own server and holds the big picture: both salaries, the house you have, the one you want next, the debt, and the year work becomes optional. Nidget sends it your real balances and the last twelve months of spending, so nothing has to be guessed. Tap a scenario name to see how a different choice plays out, and open Places to price out a year somewhere new."
+        ) {
+            VStack(alignment: .leading, spacing: theme.layout.spacing) {
+                scenarioChips
+                growthCard
+            }
+        }
+    }
+
+    /// The scenario row from the top of the Household Plan screen, drawn the way ChipPicker draws
+    /// it: the chosen name is an accent capsule, the rest sit on the palette fill.
+    private var scenarioChips: some View {
+        HStack(spacing: theme.layout.spacing * 0.6) {
+            MockScenarioChip(text: "Base plan", selected: true)
+                .guideSpotlight(cornerRadius: 20, inset: 5)
+            MockScenarioChip(text: "Move to Tacoma")
+            MockScenarioChip(text: "Retire at 52")
+        }
+    }
+
+    private var growthCard: some View {
+        VStack(alignment: .leading, spacing: theme.layout.spacing * 0.6) {
+            HStack(spacing: 8) {
+                Text("Net worth at 55")
+                    .font(theme.font(.label))
+                    .foregroundStyle(theme.palette.textSecondary)
+                    .textCase(theme.typography.labelCase)
+                    .tracking(theme.typography.labelTracking)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 0)
+                AmountText(Money(cents: 368_000_000), style: .caption, colorized: false)
+            }
+            curve
+                .frame(height: 96)
+            HStack {
+                Text("Today")
+                Spacer(minLength: 0)
+                Text("Age 55")
+            }
+            .font(theme.font(.caption))
+            .foregroundStyle(theme.palette.textTertiary)
+        }
+        .themedCard(padding: 14)
+    }
+
+    /// The growth curve with a sun sitting on its far end: the point where the plan says work
+    /// becomes optional.
+    private var curve: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            let minValue = Self.values.min() ?? 0
+            let maxValue = Self.values.max() ?? 1
+            let range = max(maxValue - minValue, 1)
+            let last = Self.values.last ?? maxValue
+            // Sparkline insets its samples 2pt so the round caps stay inside, and the sun is
+            // nudged down far enough that its glyph is not half off the top of the chart.
+            let inset: CGFloat = 2
+            let endY = inset + (size.height - inset * 2) * CGFloat(1 - (last - minValue) / range)
+            ZStack(alignment: .topLeading) {
+                Sparkline(values: Self.values)
+                Image(systemName: "sun.max")
+                    .font(theme.font(.subheadline))
+                    .fontWeight(theme.icons.weight)
+                    .symbolVariant(theme.icons.fill ? .fill : .none)
+                    .foregroundStyle(theme.palette.accent)
+                    .position(x: size.width - 11, y: max(endY, 11))
+            }
+        }
+    }
+}
+
+/// A scenario chip from the Household Plan screen, matching ChipPicker's two states.
+private struct MockScenarioChip: View {
+    let text: String
+    var selected = false
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(theme.font(.subheadline))
+            .fontWeight(selected ? .semibold : .regular)
+            .foregroundStyle(selected ? theme.palette.onAccent : theme.palette.textSecondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background {
+                Capsule().fill(selected ? theme.palette.accent : theme.palette.fill)
+            }
+    }
+}
+
+// MARK: - Page 8: Intelligence
 
 struct GuideIntelligencePage: View {
     @Environment(\.theme) private var theme

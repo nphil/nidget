@@ -335,7 +335,8 @@ is opportunistic.
   func bootstrap() async                                   // called from NidgetApp .task
   func connect(serverURL: URL, password: String) async throws   // login, store creds, list files
   func selectFile(_ file: RemoteFile, e2ePassword: String?) async throws  // download, open, first sync
-  func disconnectAndWipe() async                           // wipes DB + keychain (Settings)
+  func disconnectAndWipe() async                           // wipes DB + keychain (Actual AND Retiron
+                                                           // keys) + every retiron.* preference (Settings)
 
   // published data (refreshed by refreshAll() after sync/mutations)
   private(set) var accounts: [Account]                     // sorted, with .balance populated
@@ -369,6 +370,10 @@ is opportunistic.
   func createPayee(name: String) async -> String           // returns new id
   func syncNow() async                                     // auto-categorizes new bank arrivals after a
                                                              // successful sync that changed transactions
+  func pushRetironSnapshot(manual: Bool = true) async       // open-account balances + 12 months of spend
+                                                             // → Retiron (§10b). Chained fire-and-forget off
+                                                             // a successful syncNow when retironEnabled &&
+                                                             // retironAutoPush; silent then, toasts when manual
 }
 struct TransactionDraft: Sendable { var accountID: String; var amount: Money; var date: BudgetDay
   var payeeID: String?; var newPayeeName: String?; var categoryID: String?; var notes: String?
@@ -400,20 +405,55 @@ flag; To Budget = available income − budgeted, cumulative).
 `CurrencyFormatter.currencyCode`), `biometricLock: Bool`, `privacyModeDefault: Bool`,
 `retirementConfigJSON: String`, `defaultAccountID: String?`, `categoryIcons: [String: String]`
 (category id → SF Symbol, persisted as JSON under `nidget.pref.categoryIconsJSON`; see §14),
-`themedAppIcon: Bool` (home screen icon follows the active theme; see §15), plus
-`static let shared`.
+`themedAppIcon: Bool` (home screen icon follows the active theme; see §15), the Retiron set
+(`retironEnabled: Bool`, `retironAutoPush: Bool` default true, `retironLastPush: Double` seconds
+since 1970 with 0 = never, `retironProfileCacheJSON: String` = the active scenario's raw profile
+JSON so the household plan still draws offline, `retironActiveProfileName: String`; keys
+`nidget.pref.retiron*`, see §10b/§11b), plus `static let shared`.
 NOTE: theme selection is NOT here — `ThemeManager` (already written) owns its own persistence.
 
 `KeychainStore.swift`: `enum KeychainStore { static func set(_ value: String, key: String);
 static func get(_ key: String) -> String?; static func delete(_ key: String) }` — keys:
 `actual.serverURL`, `actual.password`, `actual.token`, `actual.fileID`, `actual.groupID`,
-`actual.e2ePassword`. kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly.
+`actual.e2ePassword`, `retiron.serverURL`, `retiron.token`.
+kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly. `disconnectAndWipe()` deletes all eight.
 
 ## 10. SimpleFIN
 
 In-app SimpleFIN was removed 2026-08-10 — the Actual server's own bank sync is the import path
 now. The wire spec stays documented in `docs/PROTOCOL.md` §9 for a possible future standalone
 mode.
+
+## 10b. Retiron client (Core/Sync/RetironAPI.swift + RetironProfile.swift)
+
+Retiron is the household planner on the owner's own server (LAN/tailnet only). It owns the named
+scenarios; Nidget reads them, edits them, and sends real numbers back.
+
+```swift
+enum RetironAPIError: Error, LocalizedError, Equatable { case offline, http(status: Int),
+  server(reason: String), invalidResponse, transport(String) }
+actor RetironAPI {                                  // same shape as ActualAPI: 30s timeout,
+  init(baseURL: URL, token: String, session: URLSession = .shared)  // Logger("app.nidget","retiron"),
+  func health() async throws                        // paths + status codes logged, never payloads
+  func fetchToken() async throws -> String          // GET /api/nidget/token (open by design; setup fills it in)
+  func profiles() async throws -> RetironProfileList
+  func profile(named: String) async throws -> RetironProfile
+  func saveProfile(_ name: String, data: RetironProfileData) async throws
+  func activeProfile() async throws -> RetironProfile?   // nil when the server names none
+  func setActive(_ name: String) async throws
+  func pushSnapshot(_ snapshot: RetironSnapshotPush) async throws   // Bearer auth
+}
+```
+
+`RetironProfile.swift` models the web app's profile JSON as it really is: numbers arrive as
+STRINGS, so `RetironInputValue` is `.string` / `.bool` with single-value coding (raw JSON numbers
+are accepted and re-encoded as strings). `RetironProfileData` decodes what it knows (`inputs`,
+`cardNames`, `debtState`, `budgetState`, `liveMap`, `ts`) and keeps every unknown key in `extras`
+as `RetironJSON`, so saving a profile edited on the phone never drops a field the browser wrote.
+`RetironProfileMapper` is the only translation between profile inputs and `HouseholdPlanConfig` /
+`[DebtAccount]`, documented key by key in that file; unknown or missing keys fall back to defaults.
+`RetironSnapshotPush` is the outbound half (`as_of`, accounts with `balance_cents`/`off_budget`,
+`monthly_spend` with `outflow_cents`) — cents on the wire, never floats.
 
 ## 11. Retirement module (pure math + config)
 
@@ -446,6 +486,52 @@ MonteCarlo.swift: `struct SeededGenerator: RandomNumberGenerator` (SplitMix64) +
 (Box–Muller); simulate annual real returns N(µ−inflation, σ), accumulation to retireAge then
 withdrawals of annualSpending; compute bands + success probability. Must run < 50ms for 1,000 runs
 off-main (`Task.detached(priority: .userInitiated)`).
+
+## 11b. Household plan engine (Core/Retirement/HouseholdPlan.swift)
+
+The two-earner household projection, ported from Retiron's web planner and now the reference
+version of that math. Pure and `Sendable`, no UI imports, and it works in **Double dollars** end to
+end (projection-grade, not ledger-grade). `Money` appears only at the UI boundary, via
+`Money(clampedDollars:)`, which clamps to ±10¹⁵ cents so a runaway projection cannot overflow.
+
+```swift
+struct HouseholdPerson: Codable, Sendable, Equatable        // name, age, pay, bonus/401k/match/RSU percents
+struct HouseholdPlanConfig: Codable, Sendable, Equatable    // both people, homes, debts, goals, rates,
+                                                            // tax table, horizon — every former constant
+struct HouseholdYear: Sendable, Identifiable, Equatable     // id = yearIndex; one projected year
+enum HouseholdPlanner {
+  static func project(_ config: HouseholdPlanConfig) -> [HouseholdYear]
+  static func fiSummary(rows: [HouseholdYear], config: HouseholdPlanConfig)
+    -> (fiTarget: Double, portfolioAtTarget: Double, fiPct: Double, netWorthAtTarget: Double,
+        debtFreeYearIndex: Int?, dpHitYearIndex: Int?)
+  static func sanityChecks() -> [String]                    // DEBUG only: hand-computed invariants,
+}                                                            // empty array means they all held
+struct DebtAccount: Codable, Sendable, Equatable, Identifiable   // balance, APR, promo end, min pay, kind
+enum DebtStrategy: String, Codable, Sendable { case avalanche, snowball, custom }
+struct DebtSimResult: Sendable, Equatable { var schedule: [DebtMonth]; var payoffMonths: Int
+                                            var totalInterest: Double }
+enum DebtSimulator {
+  static func simulate(accounts: [DebtAccount], monthlyBudget: Double, strategy: DebtStrategy,
+                       balanceTransfer: BalanceTransfer?) -> DebtSimResult   // capped at 120 months
+}
+struct Destination: Codable, Sendable, Equatable, Identifiable   // + static let defaults (6 places)
+enum DestinationMath { static func runway(...) -> DestinationRunway }
+```
+
+`HouseholdYear` carries the whole row the UI draws: ages, the income split (base/bonus/RSU per
+person), gross, tax, take-home, retirement portfolio and brokerage, both homes' value/mortgage/
+equity, card and student-loan balances, the down-payment pot against its target, net rent, savings
+rate, free cash, `events: [String]`, `inWashington`, `boughtHome`. FI target is
+`annualSpend · (1 + inflation)^yearsToTarget · 25`.
+
+Deliberate departures from the web app (documented in the file, and the web app keeps its quirks
+for now): ages/base year/horizon are config, the mid-career bonus uses the person's own bonus
+percent, pre-promotion raises compound, the annual projection pays cards first and only then the
+student loan out of one budget, the down-payment pot can earn a yield, and `totalInterest` counts
+each month once instead of summing a running total.
+
+Everything here is deterministic and fast, but the screens still run it through
+`Task.detached(priority: .userInitiated)` with cancellation guards, exactly like §11's planner.
 
 ## 12. Dashboard contracts (Features/Dashboard)
 
@@ -603,8 +689,20 @@ number), projection chart (deterministic line + MC bands as layered opacity area
 success probability stat, coast-FIRE callout, "what if" quick sliders (retire age, monthly
 contribution, return) that live-update with `theme.motion.spring`, `AssumptionsSheet` for full
 `RetirementConfig` editing incl. linked-accounts multi-pick. All charts respect privacyMode.
+A `HouseholdPlanEntryCard` sits under the hero and pushes `.householdPlan`, or `.retironSettings`
+when Retiron has never been set up.
 
-**Settings** (`SettingsView`): server card (status, budget name, sync now, disconnect),
+**Household Plan** (`HouseholdPlanView` pushed via `.householdPlan`, no NavigationStack of its
+own): the two-earner plan Retiron holds, run through §11b. A scenario ChipPicker over
+`RetironAPI.profiles()` at the top (selecting one fetches it and POSTs `/api/active`), then
+Overview / Years / Debt / Places sections in sibling files. Edits from the pencil toolbar item
+(`HouseholdInputsSheet`) and from the Debt section land in `Preferences.retironProfileCacheJSON`
+first and are pushed to Retiron after, debounced, so a failed save costs the owner nothing and the
+screen still draws when the server is asleep. Adding or removing debt accounts stays in Retiron.
+
+**Settings** (`SettingsView`): server card (status, budget name, sync now, disconnect), Retiron
+card (`server.rack`: host or "Not connected", a row pushing `.retironSettings`, and once connected
+the last-push time plus a "Push now" row calling `store.pushRetironSnapshot()`),
 Appearance (theme gallery link, appearance mode picker, app icon note), Dashboard (edit layout
 button → switches tab + enables edit), Security (FaceID toggle, privacy mode), Currency picker,
 About. `ThemeGalleryView`: 2-col grid of live miniature previews (mini dashboard mock rendered with
@@ -645,7 +743,7 @@ each theme's tokens), sectioned Light/Dark, tap = apply + `Haptics.success`; cur
 enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire, settings }
 enum Route: Hashable {
   case accounts, account(String), reports, transactionDetail(String), review,
-       themeGallery, securitySettings, retirementAssumptions
+       themeGallery, securitySettings, retirementAssumptions, householdPlan, retironSettings
 }
 @MainActor @Observable final class AppRouter {
   var tab: AppTab = .dashboard
@@ -667,7 +765,8 @@ and applies `.withRouteDestinations()` — a modifier declared in AppRouter.swif
 `.account(id) → AccountDetailView(accountID: id)`, `.reports → ReportsView()`,
 `.transactionDetail(id) → TransactionDetailView(transactionID: id)`,
 `.review → ReviewView()`, `.themeGallery → ThemeGalleryView()`,
-`.securitySettings → SecuritySettingsView()`, `.retirementAssumptions → AssumptionsSheet()`.
+`.securitySettings → SecuritySettingsView()`, `.retirementAssumptions → AssumptionsSheet()`,
+`.householdPlan → HouseholdPlanView()`, `.retironSettings → RetironSettingsView()`.
 Those view names + init signatures are therefore BINDING on their owning agents.
 `QuickAddView()` takes no arguments and is presented as a sheet by RootView.
 

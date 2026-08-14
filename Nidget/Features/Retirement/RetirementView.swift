@@ -33,7 +33,9 @@ enum RetirementConfigCodec {
 //
 // The Retire tab root, reframed around the owner's actual question: "how far from retirement
 // am I, and how does my spending affect that?" (docs/UX_ROUND2.md §2). Layout, top to bottom:
-// countdown hero ("Retirement at ~58" + years to go, FI ring second), the spending card with a
+// countdown hero ("Retirement at ~58" + years to go, FI ring second), the Household Plan card
+// (the doorway to the bigger two-earner plan Retiron holds — `HouseholdPlanEntryCard` does its
+// own loading, so nothing here waits on it), the spending card with a
 // live delta slider and a computed plain sentence, the interactive age chart
 // (`RetirementChartCard`), the "What would help" levers, the milestones row, the what-if
 // sliders, and an optional on-device "Explain my plan" card when a generation model is
@@ -253,6 +255,7 @@ struct RetirementView: View {
         ScrollView {
             VStack(spacing: theme.layout.cardSpacing) {
                 heroCard(plan)
+                HouseholdPlanEntryCard()
                 spendingCard(plan)
                 RetirementChartCard(snapshot: plan.snapshot,
                                     config: plan.config,

@@ -3,7 +3,8 @@ import SwiftUI
 // MARK: - SettingsView
 //
 // The Settings tab root (ARCHITECTURE §14/§16): a custom themed layout of cards — never a plain
-// Form — covering the server connection, Intelligence (on-device AI), Appearance
+// Form — covering the server connection, Retiron (the household planner this app syncs balances
+// with), Intelligence (on-device AI), Appearance
 // (with the theme gallery entry point), Dashboard editing, Security, Preferences, and About. Every
 // card reads its state live from `AppStore`/`Preferences`/`ThemeManager`/`KeychainStore` on every
 // body evaluation (no locally mirrored copies), so returning from a pushed screen (theme gallery,
@@ -30,6 +31,7 @@ struct SettingsView: View {
 
     @State private var showDisconnectConfirm = false
     @State private var showCurrencyPicker = false
+    @State private var isPushingRetiron = false
 
     init() {}
 
@@ -47,6 +49,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(spacing: theme.layout.cardSpacing) {
                 serverCard
+                retironCard
                 intelligenceCard
                 guideCard
                 appearanceCard
@@ -188,6 +191,83 @@ struct SettingsView: View {
                 .padding(.leading, 16)
                 .opacity(isSyncing ? 1 : 0)
                 .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: - Retiron card
+    //
+    // Retiron is the household planner on the owner's own server. Same live-state discipline as
+    // the rest of this file: the host comes straight from the Keychain and the push state from
+    // `Preferences` on every body evaluation, so coming back from `RetironSettingsView` shows the
+    // new state without a refresh hook.
+
+    private var retironCard: some View {
+        SettingsCard(title: "Retiron", systemImage: "server.rack") {
+            navRow("Household Planner", systemImage: "chart.line.uptrend.xyaxis",
+                  detail: retironHost) {
+                router.push(.retironSettings)
+            }
+            if preferences.retironEnabled {
+                separator
+                retironPushRow
+                NidgetButton(isPushingRetiron ? "Pushing…" : "Push Now",
+                            systemImage: "arrow.up.to.line",
+                            role: .secondary) {
+                    Task { await pushRetironNow() }
+                }
+                .disabled(isPushingRetiron)
+            }
+        }
+    }
+
+    /// Host (and non-default port) of the planner, read for display only — its token is never
+    /// touched here, the same rule the Actual server row follows.
+    private var retironHost: String {
+        guard preferences.retironEnabled,
+              let raw = KeychainStore.get("retiron.serverURL"), let url = URL(string: raw),
+              let host = url.host else {
+            return "Not connected"
+        }
+        if let port = url.port { return "\(host):\(port)" }
+        return host
+    }
+
+    private var retironPushRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.up.circle")
+                .font(theme.font(.subheadline))
+                .fontWeight(theme.icons.weight)
+                .symbolVariant(theme.icons.fill ? .fill : .none)
+                .foregroundStyle(theme.palette.textTertiary)
+            Text(retironLastPushText)
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 28)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var retironLastPushText: String {
+        guard preferences.retironLastPush > 0 else { return "Nothing sent yet" }
+        let date = Date(timeIntervalSince1970: preferences.retironLastPush)
+        return "Last push \(date.formatted(.relative(presentation: .named)))"
+    }
+
+    /// The push reports its own failures through the store toast, so all that's left here is the
+    /// haptic, and the honest signal for "did it land" is the timestamp it writes on success.
+    private func pushRetironNow() async {
+        guard !isPushingRetiron else { return }
+        isPushingRetiron = true
+        let before = preferences.retironLastPush
+        await store.pushRetironSnapshot()
+        isPushingRetiron = false
+        guard !Task.isCancelled else { return }
+        if preferences.retironLastPush > before {
+            Haptics.success()
+        } else {
+            Haptics.warning()
         }
     }
 

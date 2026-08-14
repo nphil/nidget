@@ -194,6 +194,8 @@ final class AppStore {
         static let fileID = "actual.fileID"
         static let groupID = "actual.groupID"
         static let e2ePassword = "actual.e2ePassword"
+        static let retironServerURL = "retiron.serverURL"
+        static let retironToken = "retiron.token"
     }
 
     private enum DefaultsKey {
@@ -432,9 +434,19 @@ final class AppStore {
         autoCategorizeAttemptedIDs.removeAll()
 
         for key in [KeychainKey.serverURL, KeychainKey.password, KeychainKey.token,
-                    KeychainKey.fileID, KeychainKey.groupID, KeychainKey.e2ePassword] {
+                    KeychainKey.fileID, KeychainKey.groupID, KeychainKey.e2ePassword,
+                    KeychainKey.retironServerURL, KeychainKey.retironToken] {
             KeychainStore.delete(key)
         }
+        // The Retiron link is torn down with everything else: its credentials go, and so does
+        // the cached plan, which was built from this budget's numbers.
+        let preferences = Preferences.shared
+        preferences.retironEnabled = false
+        preferences.retironAutoPush = true
+        preferences.retironLastPush = 0
+        preferences.retironProfileCacheJSON = ""
+        preferences.retironActiveProfileName = ""
+
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: DefaultsKey.budgetName)
         defaults.removeObject(forKey: DefaultsKey.e2eKeyID)
@@ -1053,6 +1065,12 @@ final class AppStore {
             if outcome.changedDatasets.contains("transactions") {
                 await autoCategorizeNewArrivals()
             }
+            // Retiron plans against real balances, so a finished sync is the moment worth
+            // sending it one. Fire and forget: a planner that can't be reached must never hold
+            // up the budget, and a silent failure here is the right outcome.
+            if Preferences.shared.retironEnabled && Preferences.shared.retironAutoPush {
+                Task { await self.pushRetironSnapshot(manual: false) }
+            }
         } catch {
             let pending = await pendingCount()
             if Self.isOffline(error) {
@@ -1091,6 +1109,68 @@ final class AppStore {
             }
         }
         return false
+    }
+
+    // MARK: - Retiron snapshot push
+
+    /// Sends Retiron (the household planner) what it can't work out for itself: every open
+    /// account's balance and twelve months of real spending. Best effort in both directions —
+    /// nothing here touches the budget file, and a planner that is off or unreachable changes
+    /// nothing about the app.
+    ///
+    /// Called two ways. From the Settings "Push now" row (`manual` true) a failure surfaces as a
+    /// toast, because someone asked and deserves an answer. Chained off `syncNow()`
+    /// (`manual` false) it stays silent, the same rule the auto-categorize pass follows.
+    ///
+    /// Accounts: open ones, on budget and off, because a retirement plan cares most about the
+    /// off-budget investment accounts. Spending: `monthlySpendSeries` outflow, sent as positive
+    /// cents. Cents travel over the wire, never floats.
+    func pushRetironSnapshot(manual: Bool = true) async {
+        guard Preferences.shared.retironEnabled else { return }
+        // No budget open means no real numbers to send, and an empty push would overwrite the
+        // good snapshot Retiron already has.
+        guard dbQueue != nil else { return }
+        guard let host = KeychainStore.get(KeychainKey.retironServerURL),
+              let url = URL(string: host),
+              let token = KeychainStore.get(KeychainKey.retironToken), !token.isEmpty else {
+            if manual {
+                lastError = AppError(message: "Retiron isn't set up yet",
+                                     detail: "Add its address and token in Settings.")
+            }
+            return
+        }
+
+        let balances = accounts
+            .filter { !$0.closed }
+            .map {
+                RetironSnapshotPush.AccountBalance(id: $0.id, name: $0.name,
+                                                   balanceCents: $0.balance.cents,
+                                                   offBudget: $0.offBudget, closed: $0.closed)
+            }
+        let spend = await monthlySpendSeries(monthsBack: 12).map {
+            RetironSnapshotPush.MonthSpend(month: $0.0.dashString,
+                                           outflowCents: $0.1.magnitude.cents)
+        }
+        let snapshot = RetironSnapshotPush(asOf: Date().ISO8601Format(),
+                                           accounts: balances, monthlySpend: spend)
+
+        do {
+            try await RetironAPI(baseURL: url, token: token).pushSnapshot(snapshot)
+            Preferences.shared.retironLastPush = Date().timeIntervalSince1970
+        } catch {
+            Self.log.error("Retiron push failed: \(error.localizedDescription, privacy: .public)")
+            if manual {
+                // A rejected token is not a reachability problem; keep the headline honest.
+                let headline: String
+                if case RetironAPIError.http(let status) = error, status == 401 || status == 403 {
+                    headline = "Retiron didn't accept the token"
+                } else {
+                    headline = "Couldn't reach Retiron"
+                }
+                lastError = AppError(message: headline,
+                                     detail: error.localizedDescription)
+            }
+        }
     }
 
     // MARK: - Auto-categorize new arrivals (docs/AI.md §3)

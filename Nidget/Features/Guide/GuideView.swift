@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - GuideView
 //
-// The swipeable visual Guide (docs/UX_ROUND2.md §1): seven pages teaching envelope budgeting
+// The swipeable visual Guide (docs/UX_ROUND2.md §1): eight pages teaching envelope budgeting
 // and the app itself, built from the pages in GuidePages.swift. Two presentation modes:
 //
 // - Cover (default): RootView presents it full-screen after the first successful sync.
@@ -25,7 +25,7 @@ struct GuideView: View {
 
     @State private var pageIndex = 0
 
-    private static let pageCount = 7
+    private static let pageCount = 8
 
     init(embedded: Bool = false) {
         self.embedded = embedded
@@ -54,7 +54,8 @@ struct GuideView: View {
             GuideAccountsPage().tag(3)
             GuideDashboardPage().tag(4)
             GuideRetirementPage().tag(5)
-            GuideIntelligencePage().tag(6)
+            GuideHouseholdPage().tag(6)
+            GuideIntelligencePage().tag(7)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
     }

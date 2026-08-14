@@ -23,6 +23,8 @@ enum Route: Hashable {
     case themeGallery
     case securitySettings
     case retirementAssumptions
+    case householdPlan
+    case retironSettings
     case manageCategories
     case intelligence
     case aiBenchmark
@@ -116,6 +118,10 @@ private struct RouteDestinationsModifier: ViewModifier {
                 SecuritySettingsView()
             case .retirementAssumptions:
                 AssumptionsSheet()
+            case .householdPlan:
+                HouseholdPlanView()
+            case .retironSettings:
+                RetironSettingsView()
             case .manageCategories:
                 ManageCategoriesView()
             case .intelligence:

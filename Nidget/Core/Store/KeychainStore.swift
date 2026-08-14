@@ -10,7 +10,8 @@ import os
 // unlock, never migrated to a new device via backup).
 //
 // Keys used by AppStore: `actual.serverURL`, `actual.password`, `actual.token`,
-// `actual.fileID`, `actual.groupID`, `actual.e2ePassword`.
+// `actual.fileID`, `actual.groupID`, `actual.e2ePassword`, plus the Retiron planner's own pair
+// `retiron.serverURL`, `retiron.token`. Disconnecting wipes all of them.
 //
 // Values are secrets — they are NEVER logged; only OSStatus codes are.
 

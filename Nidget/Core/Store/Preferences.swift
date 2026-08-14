@@ -34,6 +34,11 @@ final class Preferences {
         static let categoryIconsJSON = "nidget.pref.categoryIconsJSON"
         static let aiAutoFiledIDsJSON = "nidget.pref.aiAutoFiledIDs"
         static let themedAppIcon = "nidget.pref.themedAppIcon"
+        static let retironEnabled = "nidget.pref.retironEnabled"
+        static let retironAutoPush = "nidget.pref.retironAutoPush"
+        static let retironLastPush = "nidget.pref.retironLastPush"
+        static let retironProfileCacheJSON = "nidget.pref.retironProfileCacheJSON"
+        static let retironActiveProfileName = "nidget.pref.retironActiveProfileName"
     }
 
     /// Serialized `[DashboardItem]` (Features/Dashboard). Empty string = use the default layout.
@@ -73,6 +78,34 @@ final class Preferences {
     /// Serialized `RetirementConfig` (Core/Retirement). Empty string = defaults.
     var retirementConfigJSON: String {
         didSet { UserDefaults.standard.set(retirementConfigJSON, forKey: Key.retirementConfigJSON) }
+    }
+
+    /// A Retiron server is set up (its address and token are in the Keychain under `retiron.*`).
+    /// Set when the owner saves a working connection, cleared on disconnect.
+    var retironEnabled: Bool {
+        didSet { UserDefaults.standard.set(retironEnabled, forKey: Key.retironEnabled) }
+    }
+
+    /// Send the account snapshot to Retiron after every successful sync. On by default: the
+    /// whole point of connecting is that Retiron sees real balances without being asked.
+    var retironAutoPush: Bool {
+        didSet { UserDefaults.standard.set(retironAutoPush, forKey: Key.retironAutoPush) }
+    }
+
+    /// When the last snapshot reached Retiron (seconds since 1970). 0 = never.
+    var retironLastPush: Double {
+        didSet { UserDefaults.standard.set(retironLastPush, forKey: Key.retironLastPush) }
+    }
+
+    /// The active scenario's raw profile JSON, kept so the Household Plan screen still has
+    /// something to draw when Retiron is unreachable. Empty string = nothing cached yet.
+    var retironProfileCacheJSON: String {
+        didSet { UserDefaults.standard.set(retironProfileCacheJSON, forKey: Key.retironProfileCacheJSON) }
+    }
+
+    /// Name of the scenario the cache belongs to. Empty string = none.
+    var retironActiveProfileName: String {
+        didSet { UserDefaults.standard.set(retironActiveProfileName, forKey: Key.retironActiveProfileName) }
     }
 
     /// Account preselected in Quick Add; nil = first on-budget account.
@@ -183,6 +216,11 @@ final class Preferences {
         hasSeenGuide = defaults.bool(forKey: Key.hasSeenGuide)
         themedAppIcon = defaults.bool(forKey: Key.themedAppIcon)
         retirementConfigJSON = defaults.string(forKey: Key.retirementConfigJSON) ?? ""
+        retironEnabled = defaults.bool(forKey: Key.retironEnabled)
+        retironAutoPush = defaults.object(forKey: Key.retironAutoPush) as? Bool ?? true
+        retironLastPush = defaults.double(forKey: Key.retironLastPush)
+        retironProfileCacheJSON = defaults.string(forKey: Key.retironProfileCacheJSON) ?? ""
+        retironActiveProfileName = defaults.string(forKey: Key.retironActiveProfileName) ?? ""
         defaultAccountID = defaults.string(forKey: Key.defaultAccountID)
         aiCustomModelsJSON = defaults.string(forKey: Key.aiCustomModelsJSON) ?? ""
         aiEmbeddingModelID = defaults.string(forKey: Key.aiEmbeddingModelID)
