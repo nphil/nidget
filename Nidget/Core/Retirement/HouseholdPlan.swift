@@ -95,8 +95,9 @@ struct HouseholdPlanConfig: Codable, Sendable, Equatable {
 
     // MARK: Horizon
 
-    /// Calendar year of row 0. The Retiron profile has no field for this, so it stays local.
-    var baseYear: Int = 2025
+    /// Calendar year of row 0. The Retiron profile has no field for this, so it stays local
+    /// and defaults to the year the plan is drawn in.
+    var baseYear: Int = Calendar.current.component(.year, from: Date())
     /// Number of projected years (rows).
     var years: Int = 25
     /// The age (of `personA`) the summary reports against.
@@ -742,7 +743,9 @@ enum DebtSimulator {
                 debts[index].balance -= moved
                 moving -= moved
             }
-            transferBalance = transfer.amount * (1 + transfer.feePct / 100)
+            // The fee is charged on what actually moved off the cards, so a transfer bigger
+            // than the balances does not invent debt.
+            transferBalance = (transfer.amount - moving) * (1 + transfer.feePct / 100)
         }
 
         let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month],

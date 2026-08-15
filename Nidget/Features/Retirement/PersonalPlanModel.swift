@@ -43,7 +43,8 @@ struct PersonalPlanResult: Sendable {
 //   .task(id: model.computeKey) { await model.recompute() }
 //   .onChange(of: preferences.retirementConfigJSON) { _, _ in model.reloadSavedConfig() }
 //   .task(id: model.savedConfig.linkedAccountIDs) { await model.refreshDetectedContribution() }
-//   .task { await model.refreshActualMonthlySpend() }   // available even when unconfigured
+//   .task(id: store.accounts) { await model.refreshActualMonthlySpend() }   // even unconfigured;
+//                                                        // rekeyed so a sync rescans spending
 // Animations moved to the view layer: the model sets state plainly and views attach
 // `.animation(_:value:)` where they want motion.
 
@@ -67,6 +68,10 @@ final class PersonalPlanModel {
 
     private(set) var plan: PersonalPlanResult?
     private(set) var isRecomputing = false
+    /// The plan is set up but there is no spending to plan around: derive from budget is on
+    /// and the last twelve months summed to zero. No plan publishes while this is true; the
+    /// view shows a card pointing at Plan Inputs instead of the hero.
+    private(set) var needsSpendingData = false
     /// A lever was just tapped, so the What If sheet should open on the seeded draft. Cleared
     /// once the draft is saved or reset.
     var pendingLeverSeed = false
@@ -222,14 +227,25 @@ final class PersonalPlanModel {
     // MARK: Recompute
 
     func recompute() async {
-        guard !isUnconfigured else { return }
+        guard !isUnconfigured else {
+            isRecomputing = false
+            return
+        }
         let key = computeKey
         // Reappearing with an up-to-date plan (tab switch) shouldn't burn another simulation.
-        if plan != nil, lastComputedKey == key { return }
+        // A cancelled earlier run can leave the flag set with nothing left to clear it, so
+        // this exit clears it too; the plan on screen is current by definition here.
+        if plan != nil, lastComputedKey == key {
+            isRecomputing = false
+            return
+        }
 
         if plan != nil {
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                isRecomputing = false
+                return
+            }
             isRecomputing = true
         }
 
@@ -240,9 +256,23 @@ final class PersonalPlanModel {
             .reduce(Money.zero) { $0 + $1.balance }
 
         let series = await store.monthlySpendSeries(monthsBack: 12)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+            isRecomputing = false
+            return
+        }
         let annualSpending = series.reduce(Money.zero) { $0 + $1.1.magnitude }
         actualMonthlySpend = Money(cents: annualSpending.cents / 12)
+
+        // Deriving from budget with nothing to derive from is missing input, not a plan that
+        // costs nothing. Publishing it would draw a fully funded hero over no data at all,
+        // so hold the plan back and let the view point at Plan Inputs instead.
+        if savedConfig.annualSpendingOverride == nil, annualSpending == .zero {
+            needsSpendingData = true
+            plan = nil
+            isRecomputing = false
+            return
+        }
+        needsSpendingData = false
 
         // Fold the spending delta into the effective config: the retirement-spending target
         // moves by delta x 12, and the freed (or consumed) money moves the contribution.
@@ -280,7 +310,10 @@ final class PersonalPlanModel {
             return DetachedPlan(snapshot: snapshot, levers: levers,
                                 baselineProjectedAge: baselineProjected)
         }.value
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+            isRecomputing = false
+            return
+        }
 
         plan = PersonalPlanResult(snapshot: result.snapshot,
                                   config: config,
@@ -309,10 +342,11 @@ final class PersonalPlanModel {
     }
 
     /// Loads `actualMonthlySpend` on its own, for the states where `recompute` never runs. A
-    /// recompute (or an earlier call) that already worked it out is left alone, so mounting this
-    /// alongside the plan does not run a second twelve-month scan.
+    /// scan that already found real spending is left alone, so mounting this alongside the
+    /// plan does not run a second twelve-month scan; a zero result is retried, because a sync
+    /// can land new transactions at any moment.
     func refreshActualMonthlySpend() async {
-        guard actualMonthlySpend == nil else { return }
+        guard (actualMonthlySpend?.cents ?? 0) <= 0 else { return }
         let series = await store.monthlySpendSeries(monthsBack: 12)
         guard !Task.isCancelled else { return }
         let annual = series.reduce(Money.zero) { $0 + $1.1.magnitude }

@@ -253,14 +253,19 @@ private struct PlacesContent: View {
     }
 
     private func runwaySentence(_ runway: DestinationRunway) -> String {
-        let years = Self.wholeYears(runway.runwayYears)
         if runway.netNeed <= 0 {
             return "The rent alone covers a year here, so the portfolio never has to."
         }
         if runway.runwayYears >= DestinationMath.maxRunwayYears {
             return "The portfolio outlasts anything worth planning for here."
         }
-        return "The portfolio covers about \(years) years of that."
+        // `wholeYears` rounds, so one year and under a year are ordinary values here and both
+        // need their own words.
+        switch Self.wholeYears(runway.runwayYears) {
+        case 0: return "The portfolio covers less than a year of that."
+        case 1: return "The portfolio covers about a year of that."
+        case let years: return "The portfolio covers about \(years) years of that."
+        }
     }
 
     private func moneyRow(_ label: String, _ amount: Money) -> some View {

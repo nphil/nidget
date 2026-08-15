@@ -182,7 +182,10 @@ struct RetirementChartCard: View {
                           y: .value("Enough to retire", fiValue))
                     .foregroundStyle(theme.palette.positive)
                     .symbolSize(90)
-                    .annotation(position: .bottom, alignment: .center, spacing: 4) {
+                    .annotation(position: .bottom, alignment: .center, spacing: 4,
+                                overflowResolution: .init(x: .fit(to: .plot), y: .disabled)) {
+                        // Someone within a year of FI lands this label on the left edge, where
+                        // it would otherwise sit over the money labels on the y axis.
                         Text("~\(clampedAge(projected))")
                             .font(theme.font(.caption))
                             .foregroundStyle(theme.palette.textSecondary)

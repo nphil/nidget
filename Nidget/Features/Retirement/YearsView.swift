@@ -269,8 +269,18 @@ private struct YearsContent: View {
                 houseHeader(HouseholdCopy.homeCity, systemImage: "house")
                 houseRow("Worth today", today?.atlValue ?? 0)
                 houseRow("Your share of it", today?.atlEquity ?? 0)
-                houseRow("Rent after costs", rentRow?.netRentMonthly ?? 0,
-                         caption: "a month once you move out")
+                // No row for the purchase year means the move sits past the end of the
+                // projection, and a rent of $0.00 would read as a real number.
+                if let rentRow {
+                    houseRow("Rent after costs", rentRow.netRentMonthly,
+                             caption: "a month once you move out")
+                } else {
+                    Text("The move is set for \(String(config.baseYear + config.tacBuyYear)), past the last year this plan reaches, so there is no rent to show for it.")
+                        .font(theme.font(.caption))
+                        .foregroundStyle(theme.palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             separator
             VStack(spacing: theme.layout.spacing * 0.5) {

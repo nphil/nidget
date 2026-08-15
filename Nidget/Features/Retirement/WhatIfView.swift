@@ -71,6 +71,9 @@ private struct WhatIfContent: View {
     @State private var userTouched = false
     @State private var saved = false
     @State private var hasAppeared = false
+    /// How deep the Retire stack was when this screen arrived. A tab switch leaves it alone and
+    /// a push on top raises it, so only a real pop reads back shallower than this.
+    @State private var depthOnAppear = 0
 
     var body: some View {
         content
@@ -86,12 +89,17 @@ private struct WhatIfContent: View {
             .onAppear {
                 guard !hasAppeared else { return }
                 hasAppeared = true
+                depthOnAppear = router.retirePath.count
                 // Only a lever pre-apply counts as throwaway state. Drafts the user made by
                 // hand on an earlier visit are theirs, and popping back must not eat them.
                 leverSeeded = personal.pendingLeverSeed
                 personal.pendingLeverSeed = false
             }
             .onDisappear {
+                // onDisappear also fires on a tab switch, and the seeded draft is still the
+                // thing the user is looking at then. Discard it only when the screen actually
+                // left the stack.
+                guard router.retirePath.count < depthOnAppear else { return }
                 if leverSeeded && !userTouched && !saved {
                     personal.resetDrafts()
                 }
@@ -104,6 +112,10 @@ private struct WhatIfContent: View {
             emptyState
         } else if let plan = personal.plan {
             planScroll(plan)
+        } else if personal.needsSpendingData {
+            // No plan is published without a spending number, so the spinner below would never
+            // land. Send the user to the one screen that fixes it.
+            spendingNeededState
         } else {
             loadingView
         }
@@ -116,6 +128,15 @@ private struct WhatIfContent: View {
                        title: "Link your investment accounts",
                        message: "Tell Nidget which accounts hold your future, or add outside assets, and it will chart your road to retirement.",
                        actionTitle: "Set Up Retirement",
+                       action: { router.push(.planInputs) })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var spendingNeededState: some View {
+        EmptyStateView(systemImage: "questionmark.circle",
+                       title: "Nidget cannot see your spending",
+                       message: "There is nothing in the last year of the budget to work from, so set what a year of retirement costs by hand and this screen comes alive.",
+                       actionTitle: "Plan Inputs",
                        action: { router.push(.planInputs) })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

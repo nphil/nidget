@@ -101,8 +101,12 @@ private struct DebtContent: View {
                 if !promoWarnings.isEmpty {
                     warningsCard(promoWarnings)
                 }
-                if plan.accounts.isEmpty {
-                    debtFreeCard
+                if isDebtFree(plan) {
+                    debtFreeCard(hasAccounts: !plan.accounts.isEmpty)
+                    // Cleared cards still open for editing, so a balance can come back.
+                    if !plan.accounts.isEmpty {
+                        accountsCard
+                    }
                 } else {
                     HouseholdDebtChart(plan: plan)
                     accountsCard
@@ -172,8 +176,15 @@ private struct DebtContent: View {
         plan.debt.payoffMonths < DebtSimulator.maxMonths - 1
     }
 
+    /// Nothing owed, which is not the same as no accounts: a cleared card stays in the list
+    /// until it is removed in Retiron. The glance tile draws the line here too, so the two
+    /// screens never disagree.
+    private func isDebtFree(_ plan: HouseholdPlanResult) -> Bool {
+        !plan.accounts.contains { $0.balance > 0 }
+    }
+
     private func payoffText(_ plan: HouseholdPlanResult) -> String {
-        guard !plan.accounts.isEmpty else { return "Done" }
+        guard !isDebtFree(plan) else { return "Done" }
         guard isEverCleared(plan) else { return "Over 10 yr" }
         let months = plan.debt.payoffMonths
         if months < 24 { return "\(months) mo" }
@@ -181,7 +192,7 @@ private struct DebtContent: View {
     }
 
     private func payoffCaption(_ plan: HouseholdPlanResult) -> String {
-        guard !plan.accounts.isEmpty else { return "nothing left to pay" }
+        guard !isDebtFree(plan) else { return "nothing left to pay" }
         guard isEverCleared(plan), let last = plan.debt.schedule.last else {
             return "more money a month would fix it"
         }
@@ -190,18 +201,27 @@ private struct DebtContent: View {
 
     // MARK: Levers
 
+    /// Reports the order that is actually being simulated, including `.custom`. Collapsing it
+    /// onto one of the two named orders would light up a chip that is not what the chart is
+    /// running, and ChipPicker ignores a tap on the chip it already shows as selected.
     private var strategyBinding: Binding<DebtStrategy> {
         Binding(get: { [household] in
-            (household.plan?.strategy ?? .avalanche) == .snowball ? .snowball : .avalanche
+            household.plan?.strategy ?? .avalanche
         }, set: { [household] in
             household.applyStrategy($0)
         })
     }
 
+    /// The order Retiron is holding only earns a chip while it is the one in use, and it drops
+    /// out of the row the moment the user picks one of the two Nidget can set.
+    private func strategyItems(_ plan: HouseholdPlanResult) -> [DebtStrategy] {
+        plan.strategy == .custom ? [.avalanche, .snowball, .custom] : [.avalanche, .snowball]
+    }
+
     private func leversCard(_ plan: HouseholdPlanResult) -> some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing) {
             SectionHeader("How you pay it off")
-            ChipPicker(items: [DebtStrategy.avalanche, DebtStrategy.snowball],
+            ChipPicker(items: strategyItems(plan),
                        selection: strategyBinding,
                        label: { Self.strategyLabel($0) })
             Text(Self.strategyExplainer(plan.strategy))
@@ -412,10 +432,12 @@ private struct DebtContent: View {
                 })
     }
 
-    private var debtFreeCard: some View {
+    private func debtFreeCard(hasAccounts: Bool) -> some View {
         EmptyStateView(systemImage: "checkmark.circle",
                        title: "All clear",
-                       message: "Nothing left to pay down. Adding or removing accounts happens in Retiron.")
+                       message: hasAccounts
+                           ? "Every account is down to zero, so there is nothing left to pay down."
+                           : "Nothing left to pay down. Adding or removing accounts happens in Retiron.")
             .themedCard()
     }
 
@@ -470,7 +492,7 @@ private struct DebtContent: View {
         case .snowball:
             return "Spare money clears the smallest balance first. It costs a little more, and it feels like progress sooner."
         case .custom:
-            return "Retiron is holding an order of your own. Pick one of these two to change it."
+            return "Retiron is holding an order of your own. Pick priciest first or smallest first to change it."
         }
     }
 

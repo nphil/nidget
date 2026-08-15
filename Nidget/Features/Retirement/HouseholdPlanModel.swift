@@ -40,7 +40,7 @@ struct HouseholdPlaceRunway: Sendable, Equatable, Identifiable {
 // simulation, and the destination runways all come out of the one detached task.
 //
 // Wiring contract for the owning view:
-//   .task { await model.load() }              // and .refreshable { await model.load() }
+//   .task { await model.load() }              // and .refreshable { await model.refresh() }
 //   .task(id: model.recomputeKey) { await model.recompute() }
 // Animations moved to the view layer: the model sets state plainly and views attach
 // `.animation(_:value:)` where they want motion.
@@ -176,16 +176,24 @@ final class HouseholdPlanModel {
             preferences.retironScenarioNames = Self.encodedNames(scenarioNames)
             // A remembered name Retiron no longer knows 404s on fetch, and worse, the next
             // edit's save would upsert it straight back into existence. Forget it and follow
-            // Retiron.
+            // Retiron, and drop the cache with the name so a stale scenario can never outlive
+            // it and read as synced on the next launch.
             if let remembered = selectedName, !scenarioNames.contains(remembered) {
                 selectedName = nil
                 preferences.retironActiveProfileName = ""
+                preferences.retironProfileCacheJSON = ""
             }
             let target = selectedName ?? list.active ?? list.profiles.first?.name
             if let target {
-                let fetched = try await api.profile(named: target)
-                guard !Task.isCancelled else { return }
-                adopt(fetched)
+                // An edit that never reached Retiron has to land before Retiron's copy can be
+                // adopted, or a refresh would quietly roll the edit back. If the push fails
+                // again, the local scenario stays on screen and the notice card stands.
+                if await flushPendingSave() {
+                    guard !Task.isCancelled else { return }
+                    let fetched = try await api.profile(named: target)
+                    guard !Task.isCancelled else { return }
+                    adopt(fetched)
+                }
             }
             loadError = nil
             lastSynced = Date()
@@ -193,6 +201,17 @@ final class HouseholdPlanModel {
             guard !Task.isCancelled else { return }
             Self.log.error("Retiron plan load failed: \(error.localizedDescription, privacy: .public)")
             loadError = error.localizedDescription
+        }
+    }
+
+    /// What pull to refresh calls. While an edit is stuck on this phone the pull retries the
+    /// push, matching the footer's Retry button, because a plain reload would adopt Retiron's
+    /// older copy over the unsent edit. Everything else is an ordinary reload.
+    func refresh() async {
+        if saveError != nil {
+            retrySave()
+        } else {
+            await load()
         }
     }
 
@@ -221,6 +240,10 @@ final class HouseholdPlanModel {
             // Same reason as `load`: the cancellation guards below must not be able to leave the
             // spinner running.
             defer { isLoading = false }
+            // An unsent edit on the current scenario has to land before switching away, or
+            // the switch would strand it behind the server's copy. If the push fails, stay
+            // put so the notice card and its Retry still apply to the edited scenario.
+            guard await flushPendingSave() else { return }
             do {
                 let fetched = try await api.profile(named: name)
                 guard !Task.isCancelled else { return }
@@ -238,13 +261,12 @@ final class HouseholdPlanModel {
     }
 
     /// Takes a fetched scenario as the one on screen and caches it for the next offline visit.
+    /// Callers flush any unsent edit first (`flushPendingSave`), so adopting here can never
+    /// bury a failed push or clear the warning about it.
     private func adopt(_ fetched: RetironProfile) {
         profile = fetched.data
         revision += 1
         selectedName = fetched.name
-        // Retiron's copy is now what's on screen, so any earlier failed push has nothing left to
-        // warn about.
-        saveError = nil
         preferences.retironActiveProfileName = fetched.name
         if let json = fetched.data.jsonString {
             preferences.retironProfileCacheJSON = json
@@ -296,27 +318,55 @@ final class HouseholdPlanModel {
     /// one save rather than fifty.
     private func scheduleSave(_ edited: RetironProfileData) {
         saveTask?.cancel()
-        guard let api, let name = selectedName, !name.isEmpty else {
+        // Not connected: the cache is the whole story here, so there is nothing to push and
+        // nothing to warn about.
+        guard let api else {
             saveError = nil
+            return
+        }
+        // Connected with no scenario name is different: the edit has nowhere to go, and the
+        // footer would read as synced over a change that never left the phone. Say so.
+        guard let name = selectedName, !name.isEmpty else {
+            saveError = "Nidget doesn't know which scenario this change belongs to. Pick a scenario to keep syncing."
             return
         }
         saveTask = Task { [self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
-            isSaving = true
-            defer { isSaving = false }
-            do {
-                try await api.saveProfile(name, data: edited)
-                guard !Task.isCancelled else { return }
-                saveError = nil
-                lastSynced = Date()
-            } catch {
-                guard !Task.isCancelled else { return }
-                Self.log.error("Retiron profile save failed: \(error.localizedDescription, privacy: .public)")
-                Haptics.warning()
-                saveError = error.localizedDescription
-            }
+            _ = await push(edited, name: name, api: api)
         }
+    }
+
+    /// The actual round trip. Success clears the warning and stamps the footer's "Updated"
+    /// line; failure sets `saveError` so every sync surface reports the edit is still here.
+    private func push(_ data: RetironProfileData, name: String, api: RetironAPI) async -> Bool {
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            try await api.saveProfile(name, data: data)
+            guard !Task.isCancelled else { return true }
+            saveError = nil
+            lastSynced = Date()
+            return true
+        } catch {
+            guard !Task.isCancelled else { return false }
+            Self.log.error("Retiron profile save failed: \(error.localizedDescription, privacy: .public)")
+            Haptics.warning()
+            saveError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Pushes an unsent local edit before anything adopts a server copy over it. True means
+    /// the way is clear: nothing was pending, or the push landed. False means the edit still
+    /// lives only on this phone and the caller must keep the local scenario on screen.
+    private func flushPendingSave() async -> Bool {
+        guard saveError != nil else { return true }
+        saveTask?.cancel()
+        guard let api, let name = selectedName, !name.isEmpty, let data = profile else {
+            return false
+        }
+        return await push(data, name: name, api: api)
     }
 
     // MARK: Recompute
@@ -330,14 +380,25 @@ final class HouseholdPlanModel {
     /// Projects the scenario off the main actor. The engine is fast, but it is 25 years of
     /// compounding plus up to 120 months of debt simulation, and the main actor is for drawing.
     func recompute() async {
-        guard let data = profile else { return }
+        guard let data = profile else {
+            isRecomputing = false
+            return
+        }
         let key = recomputeKey
         // Coming back to the tab with an up-to-date plan shouldn't burn another projection.
-        if plan != nil, lastComputedKey == key { return }
+        // A cancelled earlier run can leave the flag set with nothing left to clear it, so
+        // this exit clears it too; the plan on screen is current by definition here.
+        if plan != nil, lastComputedKey == key {
+            isRecomputing = false
+            return
+        }
 
         if plan != nil {
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                isRecomputing = false
+                return
+            }
             isRecomputing = true
         }
 
@@ -377,7 +438,10 @@ final class HouseholdPlanModel {
             }
             return Computed(plan: plan, runways: runways)
         }.value
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+            isRecomputing = false
+            return
+        }
 
         plan = result.plan
         runways = result.runways

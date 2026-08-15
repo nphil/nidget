@@ -328,25 +328,22 @@ struct HouseholdIncomeChart: View {
 
     // MARK: Sources
 
-    /// The fixed source list, minus anything that would render as noise: a source whose person
-    /// name is blank has no honest label, and an all-zero series has no bar, so both are
-    /// dropped before the chart and legend see them.
+    /// The fixed source list, minus anything that would render as noise: an all-zero series has
+    /// no bar, so it is dropped before the chart and legend see it. A blank person name costs
+    /// the series its name, never the series itself, so the money on the chart always adds up.
     private var sources: [Source] {
         let nameA = config.personA.name.trimmingCharacters(in: .whitespaces)
         let nameB = config.personB.name.trimmingCharacters(in: .whitespaces)
-        var built: [Source] = []
-        if !nameA.isEmpty {
-            built.append(Source(id: "salaryA", label: "\(nameA) salary", role: .role0,
-                                amount: { $0.baseA }))
-        }
-        built.append(Source(id: "bonusA", label: "Bonus and stock", role: .role1,
-                            amount: { $0.bonusA + $0.rsuA }))
-        if !nameB.isEmpty {
-            built.append(Source(id: "personB", label: nameB, role: .role2,
-                                amount: { $0.totalCompB }))
-        }
-        built.append(Source(id: "rent", label: "\(HouseholdCopy.homeCity) rent", role: .role3,
-                            amount: { max(0, $0.netRentMonthly * 12) }))
+        let built: [Source] = [
+            Source(id: "salaryA", label: nameA.isEmpty ? "Salary" : "\(nameA) salary",
+                   role: .role0, amount: { $0.baseA }),
+            Source(id: "bonusA", label: "Bonus and stock", role: .role1,
+                   amount: { $0.bonusA + $0.rsuA }),
+            Source(id: "personB", label: nameB.isEmpty ? "Second earner" : nameB,
+                   role: .role2, amount: { $0.totalCompB }),
+            Source(id: "rent", label: "\(HouseholdCopy.homeCity) rent", role: .role3,
+                   amount: { max(0, $0.netRentMonthly * 12) })
+        ]
         return built.filter { source in
             rows.contains { source.amount($0) > 0 }
         }
@@ -447,12 +444,14 @@ struct HouseholdIncomeChart: View {
 
 // MARK: - HouseholdDebtChart
 //
-// The debt coming down, month by month: one thin line per account and a thicker accent line
-// for everything added together. Series and colors are keyed by account id, never by name, so
-// two cards both called "Visa" stay two lines. Each account's line stops at its payoff month
-// (the first zero closes it out), long schedules thin to quarterly samples, and interpolation
-// is monotone on smooth-line themes because balances only fall: a monotone spline cannot
-// overshoot below zero at a payoff the way Catmull-Rom does.
+// The debt coming down, month by month: one thin line per account, one for the transfer card
+// when a balance transfer is running, and a thicker accent line for everything added together.
+// Series and colors are keyed by account id, never by name, so two cards both called "Visa"
+// stay two lines. Each account's line stops at its payoff month (the first zero closes it out),
+// long schedules thin to quarterly samples, and interpolation is monotone on smooth-line themes
+// so a spline cannot overshoot below zero at a payoff the way Catmull-Rom does. A balance can
+// climb when the payment is under the month's interest, so the y ceiling comes from the whole
+// schedule, not from month 0.
 
 struct HouseholdDebtChart: View {
     let plan: HouseholdPlanResult
@@ -488,14 +487,25 @@ struct HouseholdDebtChart: View {
     private var chart: some View {
         let interpolation: InterpolationMethod = theme.chart.smoothLines ? .monotone : .linear
         let lastMonth = plan.debt.schedule.last?.monthIndex ?? 0
+        let drawn = drawnAccounts
         return Chart {
-            ForEach(Array(plan.accounts.enumerated()), id: \.element.id) { index, account in
+            ForEach(Array(drawn.enumerated()), id: \.element.id) { index, account in
                 ForEach(accountPoints(for: account)) { point in
                     LineMark(x: .value("Month", point.month),
                              y: .value("Balance", point.balance),
                              series: .value("Account", account.id))
                         .interpolationMethod(interpolation)
                         .foregroundStyle(ChartRole.color(at: index, in: theme.palette))
+                        .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                }
+            }
+            if hasTransfer {
+                ForEach(transferPoints) { point in
+                    LineMark(x: .value("Month", point.month),
+                             y: .value("Balance", point.balance),
+                             series: .value("Account", "everything.transfer"))
+                        .interpolationMethod(interpolation)
+                        .foregroundStyle(ChartRole.color(at: drawn.count, in: theme.palette))
                         .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
                 }
             }
@@ -509,13 +519,13 @@ struct HouseholdDebtChart: View {
             }
         }
         .chartXScale(domain: 0...max(lastMonth, 1))
-        .chartYScale(domain: 0...max(startingTotal * 1.05, 1))
+        .chartYScale(domain: 0...max(peakTotal * 1.05, 1))
         .chartXAxis {
-            AxisMarks(values: yearTicks(lastMonth: lastMonth)) { value in
+            AxisMarks(values: xTicks(lastMonth: lastMonth)) { value in
                 if theme.chart.gridLines { AxisGridLine() }
                 AxisValueLabel {
                     if let month = value.as(Int.self) {
-                        Text(month == 0 ? "Now" : "\(month / 12)y")
+                        Text(Self.tickLabel(month: month))
                     }
                 }
                 .font(theme.font(.caption))
@@ -544,6 +554,26 @@ struct HouseholdDebtChart: View {
         plan.debt.schedule.first?.totalBalance ?? 0
     }
 
+    /// The tallest total in the whole schedule. A payment under the month's interest makes a
+    /// balance climb, so a ceiling taken from month 0 would push those lines out of the plot and
+    /// pin them flat along the top edge.
+    private var peakTotal: Double {
+        plan.debt.schedule.map(\.totalBalance).max() ?? 0
+    }
+
+    /// The accounts worth a line. One already at zero draws a single point, which shows as
+    /// nothing at all under a legend dot, so it leaves both the chart and the legend. The
+    /// opening month wins over the stored balance because a transfer can empty a card at month 0.
+    private var drawnAccounts: [DebtAccount] {
+        let opening = plan.debt.schedule.first?.balances ?? [:]
+        return plan.accounts.filter { (opening[$0.id] ?? $0.balance) > 0 }
+    }
+
+    /// True when a balance transfer is carrying part of the debt.
+    private var hasTransfer: Bool {
+        plan.debt.schedule.contains { $0.transferBalance > 0 }
+    }
+
     /// Schedules past five years thin to every third month; payoff months and the final month
     /// always survive so no line ends early or hangs open.
     private var isThinned: Bool {
@@ -567,6 +597,24 @@ struct HouseholdDebtChart: View {
         return built
     }
 
+    /// The transfer card's own series. The simulator counts it in every month's total, so
+    /// without this line part of the debt would be drawn nowhere and the accent total would
+    /// float above the account lines for no visible reason.
+    private var transferPoints: [Point] {
+        let lastMonth = plan.debt.schedule.last?.monthIndex
+        var built: [Point] = []
+        for month in plan.debt.schedule {
+            let balance = max(0, month.transferBalance)
+            let isPayoff = balance <= 0
+            if !isThinned || month.monthIndex % 3 == 0 || isPayoff || month.monthIndex == lastMonth {
+                built.append(Point(id: "transfer-\(month.monthIndex)",
+                                   month: month.monthIndex, balance: balance))
+            }
+            if isPayoff { break }
+        }
+        return built
+    }
+
     private var totalPoints: [Point] {
         let lastMonth = plan.debt.schedule.last?.monthIndex
         var built: [Point] = []
@@ -582,23 +630,45 @@ struct HouseholdDebtChart: View {
         return built
     }
 
-    /// Yearly x ticks: Now, 1y, 2y and so on.
-    private func yearTicks(lastMonth: Int) -> [Int] {
+    /// X ticks sized to the span: yearly for a long payoff, every six or three months for a
+    /// short one, so a schedule that clears inside a year still carries a scale instead of a
+    /// lone "Now".
+    private func xTicks(lastMonth: Int) -> [Int] {
         guard lastMonth > 0 else { return [0] }
-        return Array(stride(from: 0, through: lastMonth, by: 12))
+        let step: Int
+        if lastMonth >= 24 {
+            step = 12
+        } else if lastMonth >= 12 {
+            step = 6
+        } else {
+            step = max(1, min(3, lastMonth))
+        }
+        return Array(stride(from: 0, through: lastMonth, by: step))
+    }
+
+    /// Now at the start, whole years on the year marks, months everywhere else.
+    private static func tickLabel(month: Int) -> String {
+        if month == 0 { return "Now" }
+        if month % 12 == 0 { return "\(month / 12)y" }
+        return "\(month) mo"
     }
 
     // MARK: Legend
 
     /// Identity by account id; duplicate display names are disambiguated by position so two
-    /// "Visa" cards read "Visa (1)" and "Visa (2)".
+    /// "Visa" cards read "Visa (1)" and "Visa (2)". Only the accounts the chart actually draws
+    /// get a dot, so no swatch ever points at a missing line.
     private var legend: some View {
+        let drawn = drawnAccounts
         let names = displayNames
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: theme.layout.spacing * 0.75) {
                 legendDot("Everything", theme.palette.accent)
-                ForEach(Array(plan.accounts.enumerated()), id: \.element.id) { index, _ in
+                ForEach(Array(drawn.enumerated()), id: \.element.id) { index, _ in
                     legendDot(names[index], ChartRole.color(at: index, in: theme.palette))
+                }
+                if hasTransfer {
+                    legendDot("Transfer card", ChartRole.color(at: drawn.count, in: theme.palette))
                 }
             }
             .padding(.vertical, 2)
@@ -607,16 +677,30 @@ struct HouseholdDebtChart: View {
         .accessibilityHidden(true)
     }
 
+    /// Legend labels for the drawn accounts. A name that came over blank borrows its kind, so
+    /// the legend never shows a swatch with nothing beside it.
     private var displayNames: [String] {
+        let shown = drawnAccounts.map { account -> String in
+            let trimmed = account.name.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? Self.kindLabel(account.kind) : trimmed
+        }
         var counts: [String: Int] = [:]
-        for account in plan.accounts {
-            counts[account.name, default: 0] += 1
+        for name in shown {
+            counts[name, default: 0] += 1
         }
         var seen: [String: Int] = [:]
-        return plan.accounts.map { account in
-            guard (counts[account.name] ?? 0) > 1 else { return account.name }
-            seen[account.name, default: 0] += 1
-            return "\(account.name) (\(seen[account.name] ?? 1))"
+        return shown.map { name -> String in
+            guard (counts[name] ?? 0) > 1 else { return name }
+            seen[name, default: 0] += 1
+            return "\(name) (\(seen[name] ?? 1))"
+        }
+    }
+
+    private static func kindLabel(_ kind: DebtAccount.Kind) -> String {
+        switch kind {
+        case .card: return "Card"
+        case .loan: return "Loan"
+        case .heloc: return "HELOC"
         }
     }
 

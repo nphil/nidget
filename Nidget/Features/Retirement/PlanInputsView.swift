@@ -169,7 +169,10 @@ struct PlanInputsView: View {
             ]),
             FieldGroup(title: HouseholdCopy.nextCity, fields: [
                 Field(title: "Price", caption: nil, kind: .money(\.tacPrice)),
-                Field(title: "Bought in", caption: "years from now", kind: .count(\.tacBuyYear, 0...25)),
+                // One short of the plan length: the projection stops at year `years - 1`, and a
+                // purchase past the last row leaves the Years screen with nothing to show.
+                Field(title: "Bought in", caption: "years from now",
+                      kind: .count(\.tacBuyYear, 0...max(0, draft.years - 1))),
                 // 5 to 25 in whole steps is all Retiron's own slider can hold, and it silently
                 // snaps anything else, so keep the phone inside the same range.
                 Field(title: "Deposit", caption: "share of the price", kind: .percent(\.tacDownPct, 5...25, 1)),

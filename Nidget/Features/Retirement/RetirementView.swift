@@ -93,7 +93,9 @@ struct RetirementView: View {
                 }
             }
             .refreshable {
-                await household.load()
+                // Not `load()`: on the screen that says "Saved on this phone only", loading
+                // would adopt the server copy and take the unsent edit with it.
+                await household.refresh()
             }
             .task(id: household.isConnected) {
                 await household.load()
@@ -122,14 +124,15 @@ struct RetirementView: View {
         if household.isConnected {
             if let plan = household.plan {
                 connectedScroll(plan)
-            } else if household.isLoading || household.profile != nil {
-                // Either the fetch is on the wire or the cache is adopted and the first
-                // projection is in flight: the plan lands in a beat.
+            } else if household.profile != nil {
+                // The cache is adopted and the first projection is in flight: the plan lands in
+                // a beat, so the whole screen can wait for it.
                 householdLoadingView
             } else {
-                // Connected with nothing to draw: a fresh Retiron, an empty server, or one we
-                // could not reach. The note goes up top and the personal strand carries on
-                // below, so there is always a way forward and pull to refresh still works.
+                // Connected with nothing cached to draw: a fresh Retiron, an empty server, or
+                // one we are still waiting on. A network wait can run 30 seconds, so the note
+                // goes up top and the personal strand carries on below, which keeps a way
+                // forward on screen and pull to refresh live.
                 personalStrand(showsRetironError: true)
             }
         } else {
@@ -141,17 +144,23 @@ struct RetirementView: View {
     private func personalStrand(showsRetironError: Bool) -> some View {
         if personal.isUnconfigured {
             if showsRetironError {
-                retironErrorScroll {
+                strandScroll(showsRetironError: true) {
                     nothingConfigured
                 }
             } else {
                 nothingConfigured
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        } else if personal.needsSpendingData {
+            // Configured, but the budget has no spending to derive from, so there is no plan to
+            // draw. The card asks for the one missing number instead of inventing it.
+            strandScroll(showsRetironError: showsRetironError) {
+                spendingNeededCard
+            }
         } else if let plan = personal.plan {
             personalScroll(plan, showsRetironError: showsRetironError)
         } else if showsRetironError {
-            retironErrorScroll {
+            strandScroll(showsRetironError: true) {
                 personalLoadingView
                     .frame(minHeight: 220)
             }
@@ -160,14 +169,17 @@ struct RetirementView: View {
         }
     }
 
-    /// The Retiron note above whatever the personal strand has to show, in a scroll view so pull
-    /// to refresh stays live while the household side is empty.
-    private func retironErrorScroll<Content: View>(
+    /// Whatever the personal strand has to show, in a scroll view so pull to refresh stays live,
+    /// with the Retiron note above it when the household side has nothing to draw.
+    private func strandScroll<Content: View>(
+        showsRetironError: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
         ScrollView {
             VStack(spacing: theme.layout.cardSpacing) {
-                retironErrorCard
+                if showsRetironError {
+                    retironErrorCard
+                }
                 content()
             }
             .padding(.horizontal, theme.layout.cardPadding)
@@ -192,6 +204,22 @@ struct RetirementView: View {
             }
             .frame(maxWidth: 280)
         }
+    }
+
+    /// Shown in place of the hero when the plan is configured but the last twelve months hold no
+    /// spending to derive from. A $0 spend would make the engine say the plan is already done.
+    private var spendingNeededCard: some View {
+        VStack(alignment: .leading, spacing: theme.layout.spacing * 0.75) {
+            SectionHeader("One number missing")
+            Text("Nidget cannot see your spending yet. Set your retirement spending by hand and the projection picks up from there.")
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            NidgetButton("Open Plan Inputs", role: .secondary) {
+                router.push(.planInputs)
+            }
+        }
+        .themedCard()
     }
 
     private var personalLoadingView: some View {
@@ -340,7 +368,8 @@ struct RetirementView: View {
     // MARK: Notice cards (Card 0b)
 
     /// Both notices read `syncState`, the same enum the hero spinner and the footer read, so no
-    /// two surfaces can ever disagree about what Retiron is doing.
+    /// two surfaces can ever disagree about what Retiron is doing. One surface per state: the
+    /// card that states the problem is the one that offers the fix, and the footer stays plain.
     @ViewBuilder
     private var noticeCards: some View {
         switch household.syncState {
@@ -349,13 +378,19 @@ struct RetirementView: View {
                 noticeCard("Retiron isn't answering", loadError)
             }
         case .localEdits(let saveError):
-            noticeCard("Saved on this phone only", saveError)
+            // Retrying the save, not the load: loading here would adopt the server copy and take
+            // the unsent edit with it.
+            noticeCard("Saved on this phone only", saveError, actionTitle: "Retry") {
+                household.retrySave()
+            }
         case .notConnected, .syncing, .live:
             EmptyView()
         }
     }
 
-    private func noticeCard(_ title: String, _ message: String) -> some View {
+    private func noticeCard(_ title: String, _ message: String,
+                            actionTitle: String? = nil,
+                            action: (() -> Void)? = nil) -> some View {
         HStack(alignment: .top, spacing: theme.layout.spacing * 0.75) {
             Image(systemName: "exclamationmark.triangle")
                 .font(theme.font(.title))
@@ -372,6 +407,12 @@ struct RetirementView: View {
                     .foregroundStyle(theme.palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let actionTitle, let action {
+                Spacer(minLength: theme.layout.spacing * 0.5)
+                Button(actionTitle, action: action)
+                    .font(theme.font(.headline))
+                    .foregroundStyle(theme.palette.accent)
+            }
         }
         .themedCard()
     }
@@ -383,23 +424,44 @@ struct RetirementView: View {
         return nil
     }
 
-    /// The compact hero-slot note for the connected-but-nothing-to-show state. It covers both a
-    /// Retiron we could not reach and a Retiron with no scenario saved yet, so the headline says
-    /// which one it is and the detail line appears only when there was an error to quote.
+    /// The compact hero-slot note for the connected-but-nothing-to-show state. It covers three
+    /// cases: a fetch still on the wire, a Retiron we could not reach, and a Retiron with no
+    /// scenario saved yet. The headline says which one it is, the detail line appears only when
+    /// there was an error to quote, and the spinner takes the Retry slot while the call is out.
     private var retironErrorCard: some View {
+        let inFlight = household.isLoading
         let detail = cachedLoadError
+        let headline: String
+        if inFlight {
+            headline = "Reaching Retiron…"
+        } else {
+            headline = detail == nil ? "No household plan on Retiron yet."
+                                     : "Could not reach Retiron."
+        }
         return HStack(alignment: .top, spacing: theme.layout.spacing * 0.75) {
-            Image(systemName: detail == nil ? "house" : "antenna.radiowaves.left.and.right.slash")
-                .font(theme.font(.title))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(theme.palette.warning)
-                .accessibilityHidden(true)
+            if inFlight {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(theme.palette.accent)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: detail == nil ? "house" : "antenna.radiowaves.left.and.right.slash")
+                    .font(theme.font(.title))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(theme.palette.warning)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text(detail == nil ? "No household plan on Retiron yet."
-                                   : "Could not reach Retiron.")
+                Text(headline)
                     .font(theme.font(.headline))
                     .foregroundStyle(theme.palette.textPrimary)
-                if let detail {
+                if inFlight {
+                    Text("Your own numbers are below while it answers.")
+                        .font(theme.font(.caption))
+                        .foregroundStyle(theme.palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let detail {
                     Text(detail)
                         .font(theme.font(.caption))
                         .foregroundStyle(theme.palette.textSecondary)
@@ -407,11 +469,13 @@ struct RetirementView: View {
                 }
             }
             Spacer(minLength: theme.layout.spacing)
-            Button("Retry") {
-                Task { await household.load() }
+            if !inFlight {
+                Button("Retry") {
+                    Task { await household.refresh() }
+                }
+                .font(theme.font(.headline))
+                .foregroundStyle(theme.palette.accent)
             }
-            .font(theme.font(.headline))
-            .foregroundStyle(theme.palette.accent)
         }
         .themedCard()
     }
@@ -541,7 +605,8 @@ struct RetirementView: View {
     private var realityFooter: some View {
         Button {
             Haptics.tick()
-            router.push(personal.isUnconfigured ? .planInputs : .retireWhatIf)
+            let needsInputs = personal.isUnconfigured || personal.needsSpendingData
+            router.push(needsInputs ? .planInputs : .retireWhatIf)
         } label: {
             HStack(spacing: theme.layout.spacing * 0.5) {
                 if personal.draftDiffers, !personal.isUnconfigured {
@@ -554,7 +619,7 @@ struct RetirementView: View {
                     .accessibilityHidden(true)
                 realityText
                 Spacer(minLength: theme.layout.spacing * 0.5)
-                if !personal.isUnconfigured, personal.plan == nil {
+                if !personal.isUnconfigured, !personal.needsSpendingData, personal.plan == nil {
                     ProgressView()
                         .controlSize(.small)
                         .tint(theme.palette.accent)
@@ -578,6 +643,13 @@ struct RetirementView: View {
     private var realityText: some View {
         if personal.isUnconfigured {
             Text("Link your accounts to check this plan against real balances")
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if personal.needsSpendingData {
+            // No spending to derive from, so there is no personal plan to check against. The row
+            // asks for the missing number instead of spinning forever.
+            Text("Set your retirement spending to check this against your real balances")
                 .font(theme.font(.caption))
                 .foregroundStyle(theme.palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -699,11 +771,7 @@ struct RetirementView: View {
         let best = household.runways.max { $0.runway.runwayYears < $1.runway.runwayYears }
         let value: String
         if let best, best.runway.runwayYears > 0 {
-            if best.runway.runwayYears >= DestinationMath.maxRunwayYears {
-                value = "\(best.destination.name), \(Self.wholeYears(DestinationMath.maxRunwayYears))+ yrs"
-            } else {
-                value = "\(best.destination.name), \(Self.wholeYears(best.runway.runwayYears)) yrs"
-            }
+            value = "\(best.destination.name), \(Self.runwayText(best.runway.runwayYears))"
         } else {
             value = "Not yet"
         }
@@ -904,11 +972,11 @@ struct RetirementView: View {
                 Task { await household.load() }
             }
         case .localEdits:
-            // Retrying the save, not the load: loading here would adopt the server copy and take
-            // the unsent edit with it.
-            footerRow(text: "Changes saved on this phone. Retiron has not caught up.",
-                      buttonTitle: "Retry") {
-                household.retrySave()
+            // The notice card at the top of the scroll owns this state and carries the Retry, so
+            // the footer stays the plain plumbing line rather than warning about it twice.
+            footerRow(text: "Scenario: \(household.selectedName ?? "Your plan").",
+                      buttonTitle: "Settings") {
+                router.push(.retironSettings)
             }
         }
     }
@@ -959,9 +1027,6 @@ struct RetirementView: View {
                                     config: plan.config,
                                     isRecomputing: personal.isRecomputing)
                 milestonesDoorway(plan)
-                if !household.isConnected {
-                    householdInviteRow
-                }
                 spendingTile(assumedAnnualSpend: nil)
                 whatWouldHelp
                 if personal.canExplainPlan {
@@ -1059,14 +1124,6 @@ struct RetirementView: View {
         return { AnyView(TryingPill()) }
     }
 
-    /// The wide doorway on the not-connected glance: what connecting Retiron buys.
-    private var householdInviteRow: some View {
-        inviteRow(icon: "house.and.flag",
-                  text: "The household plan: both incomes, both houses, one screen.") {
-            router.push(.retironSettings)
-        }
-    }
-
     // MARK: Number helpers
 
     /// True percent, clamped to something printable; the ring itself clamps separately.
@@ -1085,6 +1142,19 @@ struct RetirementView: View {
     private static func clampedPercentCount(_ probability: Double) -> Int {
         guard probability.isFinite else { return 0 }
         return Int(min(max((probability * 100).rounded(), 0), 100))
+    }
+
+    /// The runway on the Places tile. Rounding means a real runway can land on one year or on
+    /// none at all, so both get their own words instead of "1 yrs" and "0 yrs".
+    private static func runwayText(_ years: Double) -> String {
+        if years >= DestinationMath.maxRunwayYears {
+            return "\(wholeYears(DestinationMath.maxRunwayYears))+ yrs"
+        }
+        switch wholeYears(years) {
+        case 0: return "under a year"
+        case 1: return "1 yr"
+        case let whole: return "\(whole) yrs"
+        }
     }
 
     private static func wholeYears(_ value: Double) -> Int {
