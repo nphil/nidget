@@ -446,6 +446,7 @@ final class AppStore {
         preferences.retironLastPush = 0
         preferences.retironProfileCacheJSON = ""
         preferences.retironActiveProfileName = ""
+        preferences.retironScenarioNames = ""
 
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: DefaultsKey.budgetName)

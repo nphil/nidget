@@ -501,7 +501,9 @@ enum HouseholdPlanner {
 
     /// The headline numbers the Overview reads.
     ///
-    /// - `fiTarget`: a year of spending, inflated to the target age, times 25.
+    /// - `fiTarget`: a year of spending, inflated to the target age, times `fiMultiple`
+    ///   (25 by default, the 4% rule; callers with a personal withdrawal rate pass
+    ///   `100 / withdrawalRatePct` so both engines agree on what "enough" means).
     /// - `portfolioAtTarget`: retirement accounts plus brokerage in the target year.
     /// - `fiPct`: portfolio as a percent of the target (exact, the UI rounds).
     /// - `netWorthAtTarget`: everything, including home equity, minus debt.
@@ -509,7 +511,8 @@ enum HouseholdPlanner {
     /// - `dpHitYearIndex`: first year the down-payment pot covers the target, nil if it never does.
     ///
     /// Falls back to the last row when the target age sits past the horizon.
-    static func fiSummary(rows: [HouseholdYear], config: HouseholdPlanConfig)
+    static func fiSummary(rows: [HouseholdYear], config: HouseholdPlanConfig,
+                          fiMultiple: Double = 25)
     -> (fiTarget: Double, portfolioAtTarget: Double, fiPct: Double, netWorthAtTarget: Double,
         debtFreeYearIndex: Int?, dpHitYearIndex: Int?) {
         let yearsToTarget = max(0, config.targetRetirementAge - config.personA.age)

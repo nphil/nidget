@@ -536,7 +536,7 @@ private struct MockTile<Content: View>: View {
     }
 }
 
-// MARK: - Page 6: retirement
+// MARK: - Page 6: the Retire screen
 
 struct GuideRetirementPage: View {
     @Environment(\.theme) private var theme
@@ -546,8 +546,8 @@ struct GuideRetirementPage: View {
 
     var body: some View {
         GuidePage(
-            title: "Retirement",
-            text: "Link your investment accounts and Nidget works out when work becomes optional, using what you actually spend. Drag on the chart to explore any age. The sliders show how saving a little more, or spending a little less, moves the date. Near the top of that screen there is a card for the bigger household plan, the one with both incomes and both houses in it."
+            title: "Retire",
+            text: "One screen holds the whole household. The ring at the top is both of you: how much of the goal the plan reaches by your target age. The line under it is the reality check, your real balances run through a thousand simulated markets. One chart shows the money over time, and the small cards open the details: the plan year by year, the debt payoff, the down payment, and places you could retire to. The quiet card at the bottom tells you when Retiron last synced."
         ) {
             VStack(alignment: .leading, spacing: theme.layout.spacing * 0.75) {
                 chart
@@ -570,7 +570,11 @@ struct GuideRetirementPage: View {
             let minValue = Self.values.min() ?? 0
             let maxValue = Self.values.max() ?? 1
             let range = max(maxValue - minValue, 1)
-            let lineY = size.height * CGFloat(1 - (Self.threshold - minValue) / range)
+            // Sparkline insets its samples 2pt so the round caps stay inside; the threshold
+            // line and the crossing dot use the same mapping or they sit off the curve.
+            let inset: CGFloat = 2
+            let drawableHeight = max(size.height - inset * 2, 1)
+            let lineY = inset + drawableHeight * CGFloat(1 - (Self.threshold - minValue) / range)
             let crossIndex = Self.values.firstIndex { $0 >= Self.threshold } ?? (Self.values.count - 1)
             let crossX = size.width * CGFloat(crossIndex) / CGFloat(max(Self.values.count - 1, 1))
             ZStack(alignment: .topLeading) {
@@ -599,7 +603,7 @@ struct GuideRetirementPage: View {
     }
 }
 
-// MARK: - Page 7: the household plan
+// MARK: - Page 7: play and save
 
 struct GuideHouseholdPage: View {
     @Environment(\.theme) private var theme
@@ -611,8 +615,8 @@ struct GuideHouseholdPage: View {
 
     var body: some View {
         GuidePage(
-            title: "The household plan",
-            text: "This is the plan for the whole household. Retiron runs on your own server and holds the big picture: both salaries, the house you have, the one you want next, the debt, and the year work becomes optional. Nidget sends it your real balances and the last twelve months of spending, so nothing has to be guessed. Tap a scenario name to see how a different choice plays out, and open Places to price out a year somewhere new."
+            title: "Play and save",
+            text: "What If is a sandbox: drag the sliders, watch the curve bend, and nothing saves until you tap Save. The three \u{201C}what would help\u{201D} rows are one-tap experiments. Saved numbers live behind the gear: your own stay on this phone, and household numbers save to Retiron for both of you. The chips at the top switch scenarios, and picking one switches it everywhere, even on Retiron. Retiron runs on your own server; Nidget sends it real balances and a year of spending, and plans come back the other way. Offline is fine: you always see the last synced plan."
         ) {
             VStack(alignment: .leading, spacing: theme.layout.spacing) {
                 scenarioChips
@@ -621,13 +625,13 @@ struct GuideHouseholdPage: View {
         }
     }
 
-    /// The scenario row from the top of the Household Plan screen, drawn the way ChipPicker draws
-    /// it: the chosen name is an accent capsule, the rest sit on the palette fill.
+    /// The scenario row from the top of the Retire screen, drawn the way ChipPicker draws it:
+    /// the chosen name is an accent capsule, the rest sit on the palette fill.
     private var scenarioChips: some View {
         HStack(spacing: theme.layout.spacing * 0.6) {
             MockScenarioChip(text: "Base plan", selected: true)
                 .guideSpotlight(cornerRadius: 20, inset: 5)
-            MockScenarioChip(text: "Move to Tacoma")
+            MockScenarioChip(text: "Move to \(HouseholdCopy.nextCity)")
             MockScenarioChip(text: "Retire at 52")
         }
     }
@@ -684,7 +688,7 @@ struct GuideHouseholdPage: View {
     }
 }
 
-/// A scenario chip from the Household Plan screen, matching ChipPicker's two states.
+/// A scenario chip from the Retire screen's scenario row, matching ChipPicker's two states.
 private struct MockScenarioChip: View {
     let text: String
     var selected = false

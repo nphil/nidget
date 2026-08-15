@@ -1,0 +1,89 @@
+name: Compile check
+
+# Compile-only gate for pull requests. Same build invocation and error grep as
+# ios-build.yml, with no versioning, packaging, tagging, or release steps, so a
+# branch can prove it compiles without shipping anything.
+on:
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile
+    runs-on: macos-15
+
+    env:
+      SCHEME:  Nidget
+      PROJECT: Nidget.xcodeproj
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache llama.xcframework
+        uses: actions/cache@v4
+        with:
+          path: Frameworks/llama.xcframework
+          key: llama-xcframework-${{ hashFiles('scripts/build-llama-xcframework.sh') }}
+
+      - name: Fetch llama.xcframework
+        run: bash scripts/fetch-llama-xcframework.sh
+
+      - name: Select Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          echo "Using: $LATEST"
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+
+      - name: Build (unsigned, compile gate only)
+        run: |
+          set +e
+          xcodebuild build \
+            -project      "$PROJECT" \
+            -scheme       "$SCHEME" \
+            -configuration Release \
+            -destination  "generic/platform=iOS" \
+            -derivedDataPath build/DD \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee xcodebuild.log
+          set -e
+
+          if grep -qE ':[0-9]+:[0-9]+: error: ' xcodebuild.log; then
+            echo "──────────────────────────────────────────────────────────────"
+            echo "❌ COMPILE FAILED — errors below (also annotated on the diff):"
+            echo "──────────────────────────────────────────────────────────────"
+            grep -E ':[0-9]+:[0-9]+: error: ' xcodebuild.log | sort -u
+            grep -E '\.swift:[0-9]+:[0-9]+: error: ' xcodebuild.log | sort -u \
+              | sed -E "s#^${GITHUB_WORKSPACE}/##" \
+              | sed -E 's#^(.+):([0-9]+):([0-9]+): error: (.*)$#::error file=\1,line=\2,col=\3::\4#'
+            exit 1
+          fi
+          echo "✅ No compile errors."
+
+          # The build step tolerates xcodebuild's exit code, so confirm the .app
+          # and its executable actually materialized before calling this green.
+          APP_PATH=$(find build/DD/Build/Products/Release-iphoneos \
+            -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ .app not built (real build failure)."
+            exit 1
+          fi
+          EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist" 2>/dev/null || echo Nidget)
+          if [ ! -s "$APP_PATH/$EXE" ]; then
+            echo "❌ App executable '$EXE' missing or empty."
+            exit 1
+          fi
+          echo "✅ Executable present."
