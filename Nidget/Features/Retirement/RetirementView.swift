@@ -64,12 +64,15 @@ struct RetirementView: View {
 
     var body: some View {
         @Bindable var router = router
+        // The models are injected on the stack itself, not on its content: a pushed
+        // navigationDestination is rendered by the NavigationStack, so it never sees
+        // environment values applied inside the root content view.
         return NavigationStack(path: $router.retirePath) {
             screenContent
                 .withRouteDestinations()
-                .environment(personal)
-                .environment(household)
         }
+        .environment(personal)
+        .environment(household)
     }
 
     private var screenContent: some View {
