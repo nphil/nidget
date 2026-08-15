@@ -684,21 +684,36 @@ reconcile affordance (marks cleared→reconciled).
 Sankey-less category trends). Swift Charts styled per `theme.chart` (bar corner radii, area
 gradients, no hardcoded colors), month-range ChipPicker, tap-to-select with annotation callout.
 
-**Retirement** (`RetirementView` tab): FI progress hero (GaugeArc + AmountText invested vs FI
-number), projection chart (deterministic line + MC bands as layered opacity areas, Swift Charts),
-success probability stat, coast-FIRE callout, "what if" quick sliders (retire age, monthly
-contribution, return) that live-update with `theme.motion.spring`, `AssumptionsSheet` for full
-`RetirementConfig` editing incl. linked-accounts multi-pick. All charts respect privacyMode.
-A `HouseholdPlanEntryCard` sits under the hero and pushes `.householdPlan`, or `.retironSettings`
-when Retiron has never been set up.
+**Retirement** (`RetirementView` tab, the "glance"): one consolidated screen for the whole
+household, backed by two `@MainActor @Observable` models created here and injected via
+`.environment`: `PersonalPlanModel` (the local `RetirementConfig` planner: drafts, detached
+250ms-debounced recompute of the 1,000-run Monte Carlo snapshot plus lever outcomes) and
+`HouseholdPlanModel` (the Retiron scenario state machine: cache-first `load()`, scenario
+`select()` + `/api/active`, `commit()` with 600ms-debounced `saveProfile`, off-main projection,
+and a single `syncState` enum every sync surface reads). Connected layout, top to bottom:
+scenario ChipPicker (Menu fallback past 4 or long names), notice cards, household hero
+(GaugeArc of `fiSummary.fiPct` with data-driven headline plus a tappable Monte Carlo
+"reality check" footer), the household net worth chart, a `RetireTile` grid (The Plan / Debt /
+Down payment / Places) plus a Spending tile, the "What would help" levers (pre-apply + push to
+What If), the on-device explain card, and a footer plumbing card owning sync status and the
+not-connected doorway. Not connected: the personal planner renders alone (hero, projection
+chart, milestone tiles, household invite). All charts respect privacyMode.
 
-**Household Plan** (`HouseholdPlanView` pushed via `.householdPlan`, no NavigationStack of its
-own): the two-earner plan Retiron holds, run through §11b. A scenario ChipPicker over
-`RetironAPI.profiles()` at the top (selecting one fetches it and POSTs `/api/active`), then
-Overview / Years / Debt / Places sections in sibling files. Edits from the pencil toolbar item
-(`HouseholdInputsSheet`) and from the Debt section land in `Preferences.retironProfileCacheJSON`
-first and are pushed to Retiron after, debounced, so a failed save costs the owner nothing and the
-screen still draws when the server is asleep. Adding or removing debt accounts stays in Retiron.
+Drill-ins pushed from the glance (parameterless, models from the environment):
+`WhatIfView` (`.retireWhatIf`, the sandbox: projection chart with Simple/Detailed bands,
+personal FI progress bar, spending delta slider, what-if sliders, milestones, explicit
+Save/Reset; drafts never touch Retiron), `YearsView` (`.retireYears`, down payment, the two
+houses, income chart, grouped year-by-year list), `DebtView` (`.retireDebt`, payoff tiles,
+avalanche/snowball strategy, promo warnings, The Way Down chart, accounts editor), `PlacesView`
+(`.retirePlaces`, runway chart plus six expandable destinations), and `PlanInputsView`
+(`.planInputs`, the one editor: a local "You" section saved to `retirementConfigJSON` and a
+"Household" section saved through `HouseholdPlanModel.commit`, plus the Retiron connection row).
+Household edits land in `Preferences.retironProfileCacheJSON` first and push to Retiron after,
+debounced, so a failed save costs the owner nothing and the screen still draws when the server
+is asleep. Adding or removing debt accounts stays in Retiron. Shared chart plumbing (round age
+ticks, scrub callout, `ChartRole` palette mapping, `HouseholdCopy`, `RetireTile`,
+`AmountEntrySheet`) lives in `RetireChartSupport.swift`; no chart file indexes `palette.chart`
+directly.
 
 **Settings** (`SettingsView`): server card (status, budget name, sync now, disconnect), Retiron
 card (`server.rack`: host or "Not connected", a row pushing `.retironSettings`, and once connected
@@ -743,7 +758,8 @@ each theme's tokens), sectioned Light/Dark, tap = apply + `Haptics.success`; cur
 enum AppTab: String, CaseIterable { case dashboard, budget, transactions, retire, settings }
 enum Route: Hashable {
   case accounts, account(String), reports, transactionDetail(String), review,
-       themeGallery, securitySettings, retirementAssumptions, householdPlan, retironSettings
+       themeGallery, securitySettings, planInputs, retireWhatIf, retireYears, retireDebt,
+       retirePlaces, retironSettings
 }
 @MainActor @Observable final class AppRouter {
   var tab: AppTab = .dashboard
@@ -765,8 +781,9 @@ and applies `.withRouteDestinations()` — a modifier declared in AppRouter.swif
 `.account(id) → AccountDetailView(accountID: id)`, `.reports → ReportsView()`,
 `.transactionDetail(id) → TransactionDetailView(transactionID: id)`,
 `.review → ReviewView()`, `.themeGallery → ThemeGalleryView()`,
-`.securitySettings → SecuritySettingsView()`, `.retirementAssumptions → AssumptionsSheet()`,
-`.householdPlan → HouseholdPlanView()`, `.retironSettings → RetironSettingsView()`.
+`.securitySettings → SecuritySettingsView()`, `.planInputs → PlanInputsView()`,
+`.retireWhatIf → WhatIfView()`, `.retireYears → YearsView()`, `.retireDebt → DebtView()`,
+`.retirePlaces → PlacesView()`, `.retironSettings → RetironSettingsView()`.
 Those view names + init signatures are therefore BINDING on their owning agents.
 `QuickAddView()` takes no arguments and is presented as a sheet by RootView.
 

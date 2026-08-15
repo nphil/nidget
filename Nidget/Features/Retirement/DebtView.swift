@@ -1,35 +1,51 @@
 import SwiftUI
 
-// MARK: - HouseholdDebtSection
+// MARK: - DebtView
 //
-// The Debt face of the Household Plan: what is owed, what it costs, when it goes, and the two
+// "Debt", pushed via `Route.retireDebt`: what is owed, what it costs, when it goes, and the two
 // levers that change all three (the payoff order and the money going at it every month).
 //
-// Edits here write straight back into the scenario's `debtState` through `RetironProfileMapper`,
-// which also refreshes the five mirror fields the yearly projection reads, so the Overview and
-// the Years sections move the moment a balance changes. Adding and removing accounts stays in
-// Retiron on purpose: this screen edits what is already there.
+// Edits flow through `HouseholdPlanModel`'s apply methods, which write into the scenario's
+// `debtState` through `RetironProfileMapper` and refresh the mirror fields the yearly projection
+// reads, so the glance and the Years screen move the moment a balance changes. Adding and
+// removing accounts stays in Retiron on purpose: this screen edits what is already there.
 //
 // The payoff chart is `HouseholdDebtChart`, over in HouseholdPlanCharts.swift with the others.
 
-struct HouseholdDebtSection: View {
-    let plan: HouseholdPlanResult
-    let onEditAccounts: ([DebtAccount]) -> Void
-    let onSetBudget: (Double) -> Void
-    let onSetStrategy: (DebtStrategy) -> Void
+struct DebtView: View {
+    /// Optional on purpose: a force read traps if this destination is ever built outside the
+    /// Retire tab's injected stack, so the model is unwrapped once and the screen shows a
+    /// placeholder instead of crashing.
+    @Environment(HouseholdPlanModel.self) private var household: HouseholdPlanModel?
+
+    var body: some View {
+        if let household {
+            DebtContent(household: household)
+        } else {
+            RetirePlaceholderScreen(title: "Debt")
+        }
+    }
+}
+
+@MainActor
+private struct DebtContent: View {
+    let household: HouseholdPlanModel
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var expandedAccount: String?
     @State private var moneyEdit: MoneyEdit?
-    /// The accounts as edited on this phone. The projection behind them is debounced (250 ms in
-    /// `HouseholdPlanView.recompute`), so `plan.accounts` lags every edit; the rows read from here
-    /// until it catches up, otherwise a held Stepper would keep adding its step to the same stale
-    /// rate. Dropped the moment a fresh plan lands, so a scenario switch always wins.
+    /// Debounces the trip to the model, so a held stepper is one save and not thirty.
+    @State private var applyTask: Task<Void, Never>?
+    /// The accounts as edited on this phone. The trip to the model is debounced in `update`, and
+    /// the projection behind it is debounced again inside `HouseholdPlanModel`, so
+    /// `plan.accounts` lags every edit; the rows read from here until it catches up, otherwise a
+    /// held Stepper would keep adding its step to the same stale rate. Dropped the moment a
+    /// fresh plan lands, so a scenario switch always wins.
     @State private var draftAccounts: [DebtAccount]?
 
-    private var accounts: [DebtAccount] { draftAccounts ?? plan.accounts }
+    private var accounts: [DebtAccount] { draftAccounts ?? household.plan?.accounts ?? [] }
 
     /// One pending trip to the keypad. The closure is where the edited amount goes home to.
     private struct MoneyEdit: Identifiable {
@@ -41,42 +57,77 @@ struct HouseholdDebtSection: View {
     }
 
     var body: some View {
-        VStack(spacing: theme.layout.cardSpacing) {
-            tilesCard
-            leversCard
-            if !warnings.isEmpty {
-                warningsCard
-            }
-            if !plan.accounts.isEmpty {
-                HouseholdDebtChart(plan: plan)
-                accountsCard
+        Group {
+            if let plan = household.plan {
+                planScroll(plan)
             } else {
-                emptyCard
+                loadingView
             }
         }
+        .themedScreen()
+        .navigationTitle("Debt")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $moneyEdit) { edit in
-            HouseholdAmountSheet(title: edit.title, caption: edit.caption, initial: edit.initial) {
+            AmountEntrySheet(title: edit.title, caption: edit.caption, initial: edit.initial) {
                 edit.apply($0)
             }
-            .presentationDetents([.height(520), .large])
-            .presentationDragIndicator(.visible)
         }
-        .onChange(of: plan.accounts) { _, _ in draftAccounts = nil }
+        .onChange(of: household.plan?.accounts) { _, _ in draftAccounts = nil }
+        .task(id: household.recomputeKey) {
+            await household.recompute()
+        }
+    }
+
+    private var loadingView: some View {
+        VStack(spacing: theme.layout.spacing) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(theme.palette.accent)
+            Text("Working out the payoff…")
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textTertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: Layout
+
+    private func planScroll(_ plan: HouseholdPlanResult) -> some View {
+        ScrollView {
+            VStack(spacing: theme.layout.cardSpacing) {
+                tilesCard(plan)
+                leversCard(plan)
+                let promoWarnings = warnings(plan)
+                if !promoWarnings.isEmpty {
+                    warningsCard(promoWarnings)
+                }
+                if plan.accounts.isEmpty {
+                    debtFreeCard
+                } else {
+                    HouseholdDebtChart(plan: plan)
+                    accountsCard
+                }
+            }
+            .padding(.horizontal, theme.layout.cardPadding)
+            .padding(.top, theme.layout.spacing * 0.5)
+            .padding(.bottom, theme.layout.cardSpacing)
+        }
+        .scrollIndicators(.hidden)
     }
 
     // MARK: Tiles
 
-    private var tilesCard: some View {
+    private func tilesCard(_ plan: HouseholdPlanResult) -> some View {
         let totalNow = plan.accounts.reduce(0) { $0 + $1.balance }
         return VStack(alignment: .leading, spacing: theme.layout.spacing) {
-            cardLabel("Where The Debt Stands")
+            SectionHeader("Where the debt stands")
             LazyVGrid(columns: [GridItem(.flexible(), spacing: theme.layout.spacing),
                                 GridItem(.flexible(), spacing: theme.layout.spacing)],
                       spacing: theme.layout.spacing) {
                 tile("Owed today", Money(clampedDollars: totalNow), caption: "across every account")
                 tile("Interest to come", Money(clampedDollars: plan.debt.totalInterest),
                      caption: "if nothing changes")
-                textTile("Clear in", payoffText, caption: payoffCaption)
+                textTile("Clear in", payoffText(plan), caption: payoffCaption(plan))
                 tile("Going at it", Money(clampedDollars: plan.monthlyDebtBudget),
                      caption: "every month")
             }
@@ -86,7 +137,7 @@ struct HouseholdDebtSection: View {
 
     private func tile(_ label: String, _ amount: Money, caption: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            cardLabel(label)
+            SectionHeader(label)
             AmountText(amount, style: .title, colorized: false)
                 .minimumScaleFactor(0.6)
             Text(caption)
@@ -101,7 +152,7 @@ struct HouseholdDebtSection: View {
 
     private func textTile(_ label: String, _ value: String, caption: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            cardLabel(label)
+            SectionHeader(label)
             Text(value)
                 .font(theme.font(.title))
                 .foregroundStyle(theme.palette.textPrimary)
@@ -117,21 +168,21 @@ struct HouseholdDebtSection: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var isEverCleared: Bool {
+    private func isEverCleared(_ plan: HouseholdPlanResult) -> Bool {
         plan.debt.payoffMonths < DebtSimulator.maxMonths - 1
     }
 
-    private var payoffText: String {
+    private func payoffText(_ plan: HouseholdPlanResult) -> String {
         guard !plan.accounts.isEmpty else { return "Done" }
-        guard isEverCleared else { return "Over 10 yr" }
+        guard isEverCleared(plan) else { return "Over 10 yr" }
         let months = plan.debt.payoffMonths
         if months < 24 { return "\(months) mo" }
         return "\(months / 12) yr \(months % 12) mo"
     }
 
-    private var payoffCaption: String {
+    private func payoffCaption(_ plan: HouseholdPlanResult) -> String {
         guard !plan.accounts.isEmpty else { return "nothing left to pay" }
-        guard isEverCleared, let last = plan.debt.schedule.last else {
+        guard isEverCleared(plan), let last = plan.debt.schedule.last else {
             return "more money a month would fix it"
         }
         return last.date.formatted(.dateTime.month(.abbreviated).year())
@@ -140,13 +191,16 @@ struct HouseholdDebtSection: View {
     // MARK: Levers
 
     private var strategyBinding: Binding<DebtStrategy> {
-        Binding(get: { plan.strategy == .snowball ? .snowball : .avalanche },
-                set: { onSetStrategy($0) })
+        Binding(get: { [household] in
+            (household.plan?.strategy ?? .avalanche) == .snowball ? .snowball : .avalanche
+        }, set: { [household] in
+            household.applyStrategy($0)
+        })
     }
 
-    private var leversCard: some View {
+    private func leversCard(_ plan: HouseholdPlanResult) -> some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing) {
-            cardLabel("How You Pay It Off")
+            SectionHeader("How you pay it off")
             ChipPicker(items: [DebtStrategy.avalanche, DebtStrategy.snowball],
                        selection: strategyBinding,
                        label: { Self.strategyLabel($0) })
@@ -154,15 +208,13 @@ struct HouseholdDebtSection: View {
                 .font(theme.font(.caption))
                 .foregroundStyle(theme.palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Rectangle()
-                .fill(theme.palette.separator)
-                .frame(height: 1)
+            separator
             Button {
                 moneyEdit = MoneyEdit(id: "budget",
                                       title: "Monthly Debt Payment",
                                       caption: "Everything you put towards cards and loans in a month.",
                                       initial: Money(clampedDollars: plan.monthlyDebtBudget)) { amount in
-                    onSetBudget(max(0, amount.doubleValue))
+                    household.applyDebtBudget(max(0, amount.doubleValue))
                 }
             } label: {
                 HStack(alignment: .firstTextBaseline) {
@@ -196,7 +248,7 @@ struct HouseholdDebtSection: View {
     // MARK: Warnings
 
     /// Promo rates about to run out, in the order they run out.
-    private var warnings: [String] {
+    private func warnings(_ plan: HouseholdPlanResult) -> [String] {
         plan.accounts
             .filter { $0.promoEndMonth > 0 && $0.promoEndMonth <= 6 && $0.balance > 0 }
             .sorted { $0.promoEndMonth < $1.promoEndMonth }
@@ -208,9 +260,9 @@ struct HouseholdDebtSection: View {
             }
     }
 
-    private var warningsCard: some View {
+    private func warningsCard(_ warnings: [String]) -> some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.5) {
-            cardLabel("Worth Knowing")
+            SectionHeader("Worth knowing")
             ForEach(warnings, id: \.self) { warning in
                 HStack(alignment: .top, spacing: theme.layout.spacing * 0.75) {
                     Image(systemName: "exclamationmark.triangle")
@@ -234,16 +286,14 @@ struct HouseholdDebtSection: View {
 
     private var accountsCard: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing * 0.75) {
-            cardLabel("Your Accounts")
+            SectionHeader("Your accounts")
             ForEach(accounts) { account in
                 accountRow(account)
                 if account.id != accounts.last?.id {
-                    Rectangle()
-                        .fill(theme.palette.separator)
-                        .frame(height: 1)
+                    separator
                 }
             }
-            Text("Retiron is where accounts get added and removed. Here you keep the numbers honest.")
+            Text("Adding or removing accounts happens in Retiron.")
                 .font(theme.font(.caption))
                 .foregroundStyle(theme.palette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -332,8 +382,9 @@ struct HouseholdDebtSection: View {
         .accessibilityHint("Opens the amount keypad")
     }
 
-    /// A stepper rather than a slider on purpose: every nudge is one committed edit that goes to
-    /// Retiron, and a dragged slider would be a hundred of them.
+    /// A stepper rather than a slider on purpose: a nudge is a deliberate edit that goes to
+    /// Retiron, and a dragged slider would be a hundred of them. A held stepper still fires
+    /// fast, so `update` debounces the commit behind it.
     private func rateStepper(_ account: DebtAccount) -> some View {
         Stepper(value: rateBinding(account), in: 0...40, step: 0.25) {
             HStack(alignment: .firstTextBaseline) {
@@ -361,27 +412,29 @@ struct HouseholdDebtSection: View {
                 })
     }
 
-    private var emptyCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("No debt in this scenario")
-                .font(theme.font(.headline))
-                .foregroundStyle(theme.palette.textPrimary)
-            Text("Nothing to pay off, which is the whole point. Add an account in Retiron if that changes.")
-                .font(theme.font(.caption))
-                .foregroundStyle(theme.palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .themedCard()
+    private var debtFreeCard: some View {
+        EmptyStateView(systemImage: "checkmark.circle",
+                       title: "All clear",
+                       message: "Nothing left to pay down. Adding or removing accounts happens in Retiron.")
+            .themedCard()
     }
 
     // MARK: Edits
 
+    /// The rows move at once off `draftAccounts`, and the model hears about it once the finger
+    /// stops. A held rate stepper fires about ten times a second, and every one of those was a
+    /// whole profile encoded and written to disk.
     private func update(_ id: String, _ change: (inout DebtAccount) -> Void) {
         var edited = accounts
         guard let index = edited.firstIndex(where: { $0.id == id }) else { return }
         change(&edited[index])
         draftAccounts = edited
-        onEditAccounts(edited)
+        applyTask?.cancel()
+        applyTask = Task { [household, edited] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            household.applyAccounts(edited)
+        }
     }
 
     private func toggle(_ id: String) {
@@ -395,6 +448,12 @@ struct HouseholdDebtSection: View {
     }
 
     // MARK: Helpers
+
+    private var separator: some View {
+        Rectangle()
+            .fill(theme.palette.separator)
+            .frame(height: 1)
+    }
 
     private static func strategyLabel(_ strategy: DebtStrategy) -> String {
         switch strategy {
@@ -413,14 +472,6 @@ struct HouseholdDebtSection: View {
         case .custom:
             return "Retiron is holding an order of your own. Pick one of these two to change it."
         }
-    }
-
-    private func cardLabel(_ text: String) -> some View {
-        Text(text)
-            .font(theme.font(.label))
-            .foregroundStyle(theme.palette.textSecondary)
-            .textCase(theme.typography.labelCase)
-            .tracking(theme.typography.labelTracking)
     }
 
     private static func percentText(_ value: Double) -> String {

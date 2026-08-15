@@ -4,7 +4,7 @@ import SwiftUI
 //
 // What one lever (save more, spend less, earn more) does to the projected retirement age,
 // relative to the current what-if state. Computed off-main by `RetirementLeverMath` inside
-// RetirementView's single detached compute task and cached with the rest of the plan.
+// PersonalPlanModel's single detached compute task and cached with the rest of the plan.
 
 enum RetirementLeverShift: Equatable, Sendable {
     /// Positive = retire this many months earlier; negative = later; near zero = no real change.
@@ -35,7 +35,7 @@ enum RetirementLeverMath {
     static let leverDollars = Money(cents: 10_000)
     /// The lever step for expected return: one percentage point.
     static let leverReturnStep = 1.0
-    /// Monte Carlo runs per lever snapshot — bands aren't shown, so cheap is fine.
+    /// Monte Carlo runs per lever snapshot; bands aren't shown, so cheap is fine.
     static let leverRuns = 300
 
     /// All three lever outcomes relative to `baseProjectedAge` (the current plan's crossing age).
@@ -89,7 +89,7 @@ enum RetirementLeverMath {
 
     /// Interpolated age at which the deterministic path reaches HALF the FI number; nil when it
     /// never does, or when the FI number is degenerate (the planner caps an unreachable target
-    /// at 10^15 cents — a chart-flattening value that means "no meaningful target").
+    /// at 10^15 cents, a chart-flattening value that means "no meaningful target").
     static func halfwayAge(snapshot: RetirementSnapshot) -> Double? {
         let degenerateCap: Int64 = 1_000_000_000_000_000
         guard snapshot.fiNumber.cents > 0, snapshot.fiNumber.cents < degenerateCap else { return nil }
@@ -110,15 +110,20 @@ enum RetirementLeverMath {
 
 // MARK: - RetirementLeversCard
 //
-// "What would help": three computed rows, each showing what one concrete change does to
-// the retirement date. Tapping a row applies that change to the what-if sliders, so the whole
-// screen (hero age, chart, sentence) animates to the new plan.
+// "What would help": three computed rows, each showing what one concrete change does to the
+// retirement date. Tapping a row pre-applies that change to the what-if drafts AND opens the
+// What If playground, so cause and effect land in one viewport; the footer row opens the
+// playground without applying anything.
 
 struct RetirementLeversCard: View {
     let outcomes: RetirementLeverOutcomes
+    /// True while unsaved drafts feed the numbers, so the header carries the Trying-things pill.
+    let showsTryingPill: Bool
     let onSaveMore: () -> Void
     let onSpendLess: () -> Void
     let onEarnMore: () -> Void
+    /// The footer row: open the playground with nothing applied.
+    let onOpen: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -126,9 +131,17 @@ struct RetirementLeversCard: View {
         CurrencyFormatter.string(RetirementLeverMath.leverDollars, format: .whole)
     }
 
+    private var headerTrailing: (() -> AnyView)? {
+        guard showsTryingPill else { return nil }
+        return { AnyView(TryingPill()) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: theme.layout.spacing) {
-            cardLabel("What Would Help")
+            SectionHeader("What would help", trailing: headerTrailing)
+            Text("Tries changes on this phone only.")
+                .font(theme.font(.caption))
+                .foregroundStyle(theme.palette.textTertiary)
             leverRow(icon: "banknote",
                      title: "Save \(stepAmount) more each month",
                      note: nil,
@@ -146,8 +159,33 @@ struct RetirementLeversCard: View {
                      note: nil,
                      shift: outcomes.earnMore,
                      action: onEarnMore)
+            divider
+            openRow
         }
         .themedCard()
+    }
+
+    private var openRow: some View {
+        Button {
+            Haptics.tick()
+            onOpen()
+        } label: {
+            HStack(spacing: theme.layout.spacing * 0.5) {
+                Text("Open the playground")
+                    .font(theme.font(.body))
+                    .foregroundStyle(theme.palette.accent)
+                Spacer(minLength: theme.layout.spacing)
+                Image(systemName: "chevron.right")
+                    .font(theme.font(.caption))
+                    .fontWeight(theme.icons.weight)
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the What If playground without changing anything")
     }
 
     private func leverRow(icon: String, title: String, note: String?,
@@ -192,17 +230,17 @@ struct RetirementLeversCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityHint("Tries this change on the what if sliders")
+        .accessibilityHint("Tries this change and opens the What If playground")
     }
 
     private func outcomeText(_ shift: RetirementLeverShift) -> String {
         switch shift {
         case .months(let months):
-            if months > 1 { return "Retire \(Self.span(months)) earlier." }
-            if months < -1 { return "Retire \(Self.span(months)) later." }
+            if months > 1 { return "Retire \(spanText(months: months)) earlier." }
+            if months < -1 { return "Retire \(spanText(months: months)) later." }
             return "Barely moves the date."
         case .inReach(let age):
-            return "Brings retirement in reach near age \(Self.clampedAge(age))."
+            return "Brings retirement in reach near age \(clampedAge(age))."
         case .outOfReach:
             return "Not enough on its own."
         case .alreadyThere:
@@ -223,27 +261,6 @@ struct RetirementLeversCard: View {
         }
     }
 
-    private static func span(_ months: Int) -> String {
-        let magnitude = abs(months)
-        if magnitude == 1 { return "about a month" }
-        if magnitude < 24 { return "about \(magnitude) months" }
-        let years = Int((Double(magnitude) / 12.0).rounded())
-        return "about \(years) years"
-    }
-
-    private static func clampedAge(_ age: Double) -> Int {
-        guard age.isFinite else { return 0 }
-        return Int(min(max(age.rounded(), 0), 150))
-    }
-
-    private func cardLabel(_ text: String) -> some View {
-        Text(text)
-            .font(theme.font(.label))
-            .foregroundStyle(theme.palette.textSecondary)
-            .textCase(theme.typography.labelCase)
-            .tracking(theme.typography.labelTracking)
-    }
-
     private var divider: some View {
         Rectangle()
             .fill(theme.palette.separator)
@@ -254,7 +271,7 @@ struct RetirementLeversCard: View {
 // MARK: - RetirementMilestonesRow
 //
 // Two small side-by-side milestone cards: Coast FIRE (when contributions could stop) and the
-// halfway point to the FI target. Both read straight off the computed snapshot — no extra
+// halfway point to the FI target. Both read straight off the computed snapshot, with no extra
 // planner runs.
 
 struct RetirementMilestonesRow: View {
@@ -276,7 +293,7 @@ struct RetirementMilestonesRow: View {
     private var coastValue: String {
         guard let coast = snapshot.coastFIREAge else { return "Not yet" }
         if coast <= Double(currentAge) + 0.05 { return "Now" }
-        return "Age \(Self.clampedAge(coast))"
+        return "Age \(clampedAge(coast))"
     }
 
     private var coastSentence: String {
@@ -298,7 +315,7 @@ struct RetirementMilestonesRow: View {
     private var halfwayValue: String {
         if snapshot.progress >= 0.5 { return "Passed" }
         guard let age = halfwayAge else { return "Not yet" }
-        return "Age \(Self.clampedAge(age))"
+        return "Age \(clampedAge(age))"
     }
 
     private var halfwaySentence: String {
@@ -315,7 +332,7 @@ struct RetirementMilestonesRow: View {
 
     private func milestoneCard(title: String, value: String, sentence: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            cardLabel(title)
+            SectionHeader(title)
             Text(value)
                 .font(theme.font(.title))
                 .foregroundStyle(theme.palette.textPrimary)
@@ -331,26 +348,13 @@ struct RetirementMilestonesRow: View {
         .themedCard()
         .accessibilityElement(children: .combine)
     }
-
-    private static func clampedAge(_ age: Double) -> Int {
-        guard age.isFinite else { return 0 }
-        return Int(min(max(age.rounded(), 0), 150))
-    }
-
-    private func cardLabel(_ text: String) -> some View {
-        Text(text)
-            .font(theme.font(.label))
-            .foregroundStyle(theme.palette.textSecondary)
-            .textCase(theme.typography.labelCase)
-            .tracking(theme.typography.labelTracking)
-    }
 }
 
 // MARK: - ContributionDetector
 //
 // Detects the owner's real monthly contribution from the ledger: the average net inflow into
 // the linked (investment) accounts over the last 6 months, counting only transfer legs
-// (rows with `transferID != nil` whose `accountID` is a linked account — the transfer leg
+// (rows with `transferID != nil` whose `accountID` is a linked account, the transfer leg
 // convention verified in docs/PROTOCOL.md / BudgetDatabase). Paged through the existing
 // `AppStore.transactions(_:)` read, never touching SQLite directly.
 

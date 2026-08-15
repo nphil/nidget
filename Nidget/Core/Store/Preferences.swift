@@ -39,6 +39,7 @@ final class Preferences {
         static let retironLastPush = "nidget.pref.retironLastPush"
         static let retironProfileCacheJSON = "nidget.pref.retironProfileCacheJSON"
         static let retironActiveProfileName = "nidget.pref.retironActiveProfileName"
+        static let retironScenarioNames = "nidget.pref.retironScenarioNames"
     }
 
     /// Serialized `[DashboardItem]` (Features/Dashboard). Empty string = use the default layout.
@@ -106,6 +107,12 @@ final class Preferences {
     /// Name of the scenario the cache belongs to. Empty string = none.
     var retironActiveProfileName: String {
         didSet { UserDefaults.standard.set(retironActiveProfileName, forKey: Key.retironActiveProfileName) }
+    }
+
+    /// The scenario names last seen on Retiron, as a JSON array so any name survives the round
+    /// trip. Lets the scenario chips draw from cache before Retiron answers. Empty string = none.
+    var retironScenarioNames: String {
+        didSet { UserDefaults.standard.set(retironScenarioNames, forKey: Key.retironScenarioNames) }
     }
 
     /// Account preselected in Quick Add; nil = first on-budget account.
@@ -221,6 +228,7 @@ final class Preferences {
         retironLastPush = defaults.double(forKey: Key.retironLastPush)
         retironProfileCacheJSON = defaults.string(forKey: Key.retironProfileCacheJSON) ?? ""
         retironActiveProfileName = defaults.string(forKey: Key.retironActiveProfileName) ?? ""
+        retironScenarioNames = defaults.string(forKey: Key.retironScenarioNames) ?? ""
         defaultAccountID = defaults.string(forKey: Key.defaultAccountID)
         aiCustomModelsJSON = defaults.string(forKey: Key.aiCustomModelsJSON) ?? ""
         aiEmbeddingModelID = defaults.string(forKey: Key.aiEmbeddingModelID)

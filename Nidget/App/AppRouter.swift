@@ -22,8 +22,11 @@ enum Route: Hashable {
     case review
     case themeGallery
     case securitySettings
-    case retirementAssumptions
-    case householdPlan
+    case planInputs
+    case retireWhatIf
+    case retireYears
+    case retireDebt
+    case retirePlaces
     case retironSettings
     case manageCategories
     case intelligence
@@ -116,10 +119,16 @@ private struct RouteDestinationsModifier: ViewModifier {
                 ThemeGalleryView()
             case .securitySettings:
                 SecuritySettingsView()
-            case .retirementAssumptions:
-                AssumptionsSheet()
-            case .householdPlan:
-                HouseholdPlanView()
+            case .planInputs:
+                PlanInputsView()
+            case .retireWhatIf:
+                WhatIfView()
+            case .retireYears:
+                YearsView()
+            case .retireDebt:
+                DebtView()
+            case .retirePlaces:
+                PlacesView()
             case .retironSettings:
                 RetironSettingsView()
             case .manageCategories:
