@@ -20,6 +20,14 @@
       ],
       "versions": [
         {
+          "version": "1.0.22",
+          "buildVersion": "1.0.22",
+          "date": "2026-08-15T02:33:37Z",
+          "localizedDescription": "Unsigned IPA \u2014 sideload with Feather/AltStore. Built from `c32ae51` on 2026-08-15 02:33 UTC",
+          "downloadURL": "https://github.com/nphil/nidget/releases/download/v1.0.22/Nidget.ipa",
+          "size": 11296661
+        },
+        {
           "version": "1.0.21",
           "buildVersion": "1.0.21",
           "date": "2026-08-15T02:16:02Z",
